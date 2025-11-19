@@ -1,4 +1,4 @@
-# biometric-
+# biometric-systems
 
 # TODO:
 - Process dataset: split into training, validation and test
