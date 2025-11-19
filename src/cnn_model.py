@@ -11,7 +11,7 @@ from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense,
 from tensorflow.keras.models import Model, Sequential, load_model
 from tensorflow.keras.optimizers import Adam
 
-AGE_CLASSES = [(0,12), (13,17),(18,25), (26, 35), (35, 45), (45-60), (60-75),(75, None)]
+AGE_CLASSES = [(0,12), (13,17), (18,25), (26,35), (36,45), (46,60), (61,74), (75, None)]
 
 class CNNModel:
     
@@ -122,14 +122,6 @@ class CNNModel:
         plt.ylabel('MAE (years)')
         plt.legend()
         plt.grid(True)
-        
-        plt.subplot(1, 2, 2)
-        # Create confusion matrix visualization
-        cm = confusion_matrix(actual_classes, predicted_classes)
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix - Age Classes')
-        plt.xlabel('Predicted Class')
-        plt.ylabel('Actual Class')
         
         plt.tight_layout()
         plt.show()
