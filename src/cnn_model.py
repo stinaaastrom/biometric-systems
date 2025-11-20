@@ -13,6 +13,10 @@ from tensorflow.keras.optimizers import Adam
 
 AGE_CLASSES = [(0,12), (13,17), (18,25), (26,35), (36,45), (46,60), (61,74), (75, None)]
 
+# Default path for model files (absolute path)
+import os
+DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'age_model.keras')
+
 class CNNModel:
     
     def __init__(self, X_train, age_train, X_test, age_test):
@@ -23,7 +27,8 @@ class CNNModel:
         self.model = None
         self.history = None
 
-    def find_age_class(self, predicted_age):
+    @staticmethod
+    def find_age_class(predicted_age):
         """
         Returns the index of the class an age belongs to,
         or None if age is outside all defined ranges.
@@ -128,16 +133,26 @@ class CNNModel:
         
         return accuracy, correct_predictions, total_predictions - correct_predictions
     
-    def save_model(self, filepath='../models/age_model.keras'):
+    def save_model(self, filepath=None):
         """Save the trained model to a file"""
-        if self.model is not None:
-            self.model.save(filepath)
-            print(f"Model saved to {filepath}")
-        else:
+        if self.model is None:
             print("No model to save. Train the model first.")
+            return
+        
+        if filepath is None:
+            filepath = DEFAULT_MODEL_PATH
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        self.model.save(filepath)
+        print(f"Model saved to {filepath}")
     
-    def load_model(self, filepath='../models/age_model.keras'):
+    def load_model(self, filepath=None):
         """Load a trained model from a file"""
+        if filepath is None:
+            filepath = DEFAULT_MODEL_PATH
+        
         self.model = load_model(filepath)
         print(f"Model loaded from {filepath}")
         return self.model
