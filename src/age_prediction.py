@@ -41,6 +41,10 @@ class AgePrediction:
         self.cnn_model = CNNModel(X_train, age_train, X_test, age_test)
         self.cnn_model.build_cnn_model()
         
+        # Store demographic data for later evaluation
+        self.gen_test = gen_test
+        self.etn_test = etn_test
+        
         print("\n✓ Training complete!")
 
     def predict_age(self, img_path):
@@ -161,7 +165,10 @@ class AgePrediction:
                     if self.cnn_model is None or self.cnn_model.model is None:
                         print("\n⚠ No model loaded. Please train a model first (option 1).")
                         continue
-                    self.cnn_model.evaluate_model_performance()
+                    # Pass demographic data if available
+                    gen_test = getattr(self, 'gen_test', None)
+                    etn_test = getattr(self, 'etn_test', None)
+                    self.cnn_model.evaluate_model_performance(gen_test, etn_test)
                     
                 elif action == '5':
                     if self.cnn_model is None:
@@ -179,8 +186,3 @@ class AgePrediction:
                     
             except Exception as e:
                 print(f"\n✗ Error: {e}")
-
-
-if __name__ == "__main__":
-    program = AgePrediction()
-    program.program_interface()
