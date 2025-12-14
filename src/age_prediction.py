@@ -97,6 +97,22 @@ class AgePrediction:
         else:
             self.cnn_model.save_model()
     
+    def load_test_dataset(self):
+        """Load the test dataset for evaluation purposes."""
+        print("\nLoading test dataset for evaluation...")
+        downloader = DatasetDownloader()
+        X_train, X_test, age_train, age_test, gen_train, gen_test, etn_train, etn_test = downloader.generate_dataset()
+        
+        # Update CNNModel's test data
+        if self.cnn_model:
+            self.cnn_model.X_test = X_test
+            self.cnn_model.age_test = age_test
+        
+        # Store demographic data for evaluation
+        self.gen_test = gen_test
+        self.etn_test = etn_test
+        print(f"✓ Test dataset loaded: {len(X_test)} samples")
+    
     def load_model(self, filepath=None):
         """Load a previously trained model from disk."""
         import numpy as np
@@ -165,6 +181,12 @@ class AgePrediction:
                     if self.cnn_model is None or self.cnn_model.model is None:
                         print("\n⚠ No model loaded. Please train a model first (option 1).")
                         continue
+                    
+                    # Check if we have real test data (not just placeholders)
+                    if len(self.cnn_model.X_test) == 1 and self.cnn_model.X_test[0].sum() == 0:
+                        print("\n No test data loaded. Loading test dataset...")
+                        self.load_test_dataset()
+                    
                     # Pass demographic data if available
                     gen_test = getattr(self, 'gen_test', None)
                     etn_test = getattr(self, 'etn_test', None)
