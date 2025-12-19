@@ -3,14 +3,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
 # Third-party imports
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix
+
+
 
 # TensorFlow/Keras imports
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, GlobalAveragePooling2D
-from tensorflow.keras.models import Model, Sequential, load_model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.applications import ResNet50
+from keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from keras.models import Model, Sequential, load_model
+from keras.optimizers import Adam
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from keras.utils import to_categorical
 
 AGE_CLASSES = [(0,12), (13,17), (18,25), (26,35), (36,45), (46,60), (61,74), (75, None)]
 
@@ -44,67 +48,82 @@ class CNNModel:
 
 
     def build_cnn_model(self):
-        """Build CNN model using ResNet50 transfer learning."""
-        print("\nLoading ResNet50 with transfer learning...")
+        # Convert ages to class indices
+        train_classes = np.array([self.find_age_class(age) for age in self.age_train])
+        test_classes = np.array([self.find_age_class(age) for age in self.age_test])
         
-        # Load pre-trained ResNet50 (without top classification layer)
-        base_model = ResNet50(
-            weights='imagenet',
-            include_top=False,
-            input_shape=(64, 64, 3)
-        )
+        # One-hot encode
+        y_train = to_categorical(train_classes, num_classes=8)
+        y_test = to_categorical(test_classes, num_classes=8)
         
-        # Freeze only the first 100 layers, allow fine-tuning of later layers
-        base_model.trainable = True
-        for layer in base_model.layers[:100]:
-            layer.trainable = False
-        
-        print(f"Frozen first 100 layers, {len([l for l in base_model.layers if l.trainable])} layers trainable")
-        
-        # Build model on top of pre-trained base
         input_layer = Input(shape=(64, 64, 3))
-        x = base_model(input_layer, training=True)
-        x = GlobalAveragePooling2D()(x)
-        x = Dense(512, activation='relu')(x)
-        x = Dropout(0.5)(x)
-        x = Dense(256, activation='relu')(x)
-        x = Dropout(0.3)(x)
-        x = Dense(128, activation='relu')(x)
-        age_output = Dense(1, name='age_output')(x)
+        x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_layer)
+        x = BatchNormalization()(x)
+        x = MaxPooling2D((2, 2))(x)
+        x = Dropout(0.25)(x)
         
-        print("ResNet50 transfer learning model created")
+        x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+        x = BatchNormalization()(x)
+        x = MaxPooling2D((2, 2))(x)
+        x = Dropout(0.25)(x)
+        
+        x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+        x = BatchNormalization()(x)
+        x = MaxPooling2D((2, 2))(x)
+        x = Dropout(0.25)(x)
+        
+        x = Flatten()(x)
+        x = Dense(256, activation='relu')(x)
+        x = Dropout(0.5)(x)
+        x = Dense(128, activation='relu')(x)
+        x = Dropout(0.5)(x)
+
+        # Classification output: 8 age classes
+        age_output = Dense(8, activation='softmax', name='age_output')(x)
 
         self.model = Model(inputs=input_layer, outputs=age_output)
         self.model.compile(
-            loss='mse',
-            optimizer=Adam(learning_rate=0.001),
-            metrics=['mae']
+            loss='categorical_crossentropy',
+            optimizer=Adam(learning_rate=0.0005),
+            metrics=['accuracy']
         )
 
         self.model.summary()
+        
+        # Callbacks for better training
+        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
+        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=1)
 
-        print("\nStarting training...")
         self.history = self.model.fit(
             self.X_train,
-            self.age_train,
-            validation_data=(self.X_test, self.age_test),
-            epochs=5,
-            batch_size=128,
-            verbose=1
+            y_train,
+            validation_data=(self.X_test, y_test),
+            epochs=50,
+            batch_size=32,
+            callbacks=[early_stop, reduce_lr]
         )
-        print("Training complete!")
 
     def evaluate_model_performance(self, gen_test=None, etn_test=None):
         """
         Evaluate model performance by comparing age class predictions
         """
-        # Make predictions on test set
+        # Make predictions on test set (returns probabilities for each class)
         predictions = self.model.predict(self.X_test)
-        predictions = predictions.flatten()  # Convert to 1D array
+        predicted_classes = np.argmax(predictions, axis=1)  # Get class with highest probability
         
-        # Convert predicted ages and actual ages to class indices
-        predicted_classes = np.array([self.find_age_class(age) for age in predictions])
+        # Convert actual ages to class indices
         actual_classes = np.array([self.find_age_class(age) for age in self.age_test])
+        
+        # Filter out None values (ages outside defined ranges)
+        valid_mask = actual_classes != None
+        predicted_classes = predicted_classes[valid_mask]
+        actual_classes = actual_classes[valid_mask]
+        
+        # Also filter demographic data if provided
+        if gen_test is not None:
+            gen_test = np.array(gen_test)[valid_mask]
+        if etn_test is not None:
+            etn_test = np.array(etn_test)[valid_mask]
         
         # Calculate accuracy
         correct_predictions = np.sum(predicted_classes == actual_classes)
@@ -126,132 +145,39 @@ class CNNModel:
             else:
                 print(f"  Class {idx}: {min_age}-{max_age}")
         
-        # Classification report by age period
-        print("\n" + "="*50)
-        print("Classification Report by Age Period")
-        print("="*50)
-        
-        # Find which classes are actually present in the test set
-        unique_classes = np.unique(np.concatenate([actual_classes, predicted_classes]))
-        unique_classes = unique_classes[unique_classes != None]  # Remove None values if any
-        
-        # Create labels only for classes that exist
-        labels = sorted([int(c) for c in unique_classes])
-        age_class_labels = [f"{AGE_CLASSES[i][0]}-{AGE_CLASSES[i][1]}" if AGE_CLASSES[i][1] else f"{AGE_CLASSES[i][0]}+" 
-                           for i in labels]
-        
-        # Generate classification report only for existing classes
-        report = classification_report(
-            actual_classes, 
-            predicted_classes, 
-            labels=labels,
-            target_names=age_class_labels,
-            zero_division=0
-        )
-        print(report)
+        # Per-class accuracy
+        print("\nPer-class accuracy:")
+        for class_idx in range(len(AGE_CLASSES)):
+            class_mask = actual_classes == class_idx
+            if np.sum(class_mask) > 0:
+                class_correct = np.sum(predicted_classes[class_mask] == class_idx)
+                class_total = np.sum(class_mask)
+                class_accuracy = (class_correct / class_total) * 100
+                min_age, max_age = AGE_CLASSES[class_idx]
+                class_label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
+                print(f"  Class {class_idx} ({class_label}): {class_accuracy:.2f}% ({class_correct}/{class_total})")
         print("="*50 + "\n")
         
-        # Detailed statistics per age period
-        print("\n" + "="*50)
-        print("Detailed Statistics per Age Period")
-        print("="*50)
+        # Plot training history
+        plt.figure(figsize=(12, 5))
         
-        for class_idx in range(len(AGE_CLASSES)):
-            min_age, max_age = AGE_CLASSES[class_idx]
-            class_label = f"{min_age}-{max_age}" if max_age else f"{min_age}+"
-            
-            # True samples (actual class)
-            true_mask = actual_classes == class_idx
-            true_count = np.sum(true_mask)
-            
-            # Predicted as this period
-            pred_mask = predicted_classes == class_idx
-            pred_count = np.sum(pred_mask)
-            
-            # Correctly classified (true positives)
-            correct_count = np.sum((actual_classes == class_idx) & (predicted_classes == class_idx))
-            
-            # MAE for this specific age class
-            if true_count > 0:
-                class_predictions = predictions[true_mask]
-                class_actuals = self.age_test[true_mask]
-                mae = np.mean(np.abs(class_predictions - class_actuals))
-            else:
-                mae = 0.0
-            
-            print(f"\nAge Period: {class_label}")
-            print(f"  True samples: {true_count}")
-            print(f"  Predicted as this period: {pred_count}")
-            print(f"  Correctly classified: {correct_count}")
-            print(f"  Mean Absolute Error: {mae:.2f} years")
-        
-        print("\n" + "="*50 + "\n")
-        
-        # Demographic analysis (gender and ethnicity misclassifications)
-        if gen_test is not None and etn_test is not None:
-            print("\n" + "="*50)
-            print("Demographic Analysis of Misclassifications")
-            print("="*50)
-            
-            # Create mask for misclassified samples
-            misclassified_mask = predicted_classes != actual_classes
-            
-            # Filter out 'unknown' values
-            gen_test_array = np.array(gen_test)
-            etn_test_array = np.array(etn_test)
-            
-            known_mask = (gen_test_array != 'unknown') & (etn_test_array != 'unknown')
-            
-            # Gender analysis
-            print("\nGender Misclassification Analysis:")
-            unique_genders = np.unique(gen_test_array[known_mask])
-            for gender in unique_genders:
-                gender_mask = (gen_test_array == gender) & known_mask
-                total_gender = np.sum(gender_mask)
-                misclassified_gender = np.sum(gender_mask & misclassified_mask)
-                if total_gender > 0:
-                    error_rate = (misclassified_gender / total_gender) * 100
-                    print(f"  {gender}: {misclassified_gender}/{total_gender} misclassified ({error_rate:.2f}%)")
-            
-            # Ethnicity analysis
-            print("\nEthnicity Misclassification Analysis:")
-            unique_ethnicities = np.unique(etn_test_array[known_mask])
-            for ethnicity in unique_ethnicities:
-                ethnicity_mask = (etn_test_array == ethnicity) & known_mask
-                total_ethnicity = np.sum(ethnicity_mask)
-                misclassified_ethnicity = np.sum(ethnicity_mask & misclassified_mask)
-                if total_ethnicity > 0:
-                    error_rate = (misclassified_ethnicity / total_ethnicity) * 100
-                    print(f"  {ethnicity}: {misclassified_ethnicity}/{total_ethnicity} misclassified ({error_rate:.2f}%)")
-            
-            print("\n" + "="*50 + "\n")
-        
-        # Create confusion matrix
-        cm = confusion_matrix(actual_classes, predicted_classes)
-        
-        # Plot training history and confusion matrix
-        plt.figure(figsize=(16, 5))
-        
-        # Plot 1: MAE history
         plt.subplot(1, 2, 1)
-        plt.plot(self.history.history['mae'], label='Train MAE')
-        plt.plot(self.history.history['val_mae'], label='Val MAE')
-        plt.title('Age Mean Absolute Error')
+        plt.plot(self.history.history['accuracy'], label='Train Accuracy')
+        plt.plot(self.history.history['val_accuracy'], label='Val Accuracy')
+        plt.title('Model Accuracy')
         plt.xlabel('Epoch')
-        plt.ylabel('MAE (years)')
+        plt.ylabel('Accuracy')
         plt.legend()
         plt.grid(True)
         
-        # Plot 2: Confusion Matrix
         plt.subplot(1, 2, 2)
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                    xticklabels=[f"{min_age}-{max_age}" if max_age else f"{min_age}+" 
-                                 for min_age, max_age in AGE_CLASSES],
-                    yticklabels=[f"{min_age}-{max_age}" if max_age else f"{min_age}+" 
-                                 for min_age, max_age in AGE_CLASSES])
-        plt.title('Confusion Matrix - Age Classes')
-        plt.xlabel('Predicted Age Class')
-        plt.ylabel('Actual Age Class')
+        plt.plot(self.history.history['loss'], label='Train Loss')
+        plt.plot(self.history.history['val_loss'], label='Val Loss')
+        plt.title('Model Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
         
         plt.tight_layout()
         plt.show()
@@ -259,7 +185,7 @@ class CNNModel:
         return accuracy, correct_predictions, total_predictions - correct_predictions
     
     def save_model(self, filepath=None):
-        """Save the trained model to a file"""
+        """Save the trained model and test data to files"""
         if self.model is None:
             print("No model to save. Train the model first.")
             return
@@ -272,12 +198,38 @@ class CNNModel:
         
         self.model.save(filepath)
         print(f"Model saved to {filepath}")
+        
+        # Also save test data for later evaluation
+        test_data_path = filepath.replace('.keras', '_testdata.npz')
+        try:
+            np.savez_compressed(
+                test_data_path,
+                X_test=self.X_test,
+                age_test=self.age_test
+            )
+            print(f"Test data saved to {test_data_path}")
+        except Exception as e:
+            print(f"Warning: Could not save test data: {e}")
     
     def load_model(self, filepath=None):
-        """Load a trained model from a file"""
+        """Load a trained model and test data from files"""
         if filepath is None:
             filepath = DEFAULT_MODEL_PATH
         
         self.model = load_model(filepath)
         print(f"Model loaded from {filepath}")
+        
+        # Also load test data if it exists
+        test_data_path = filepath.replace('.keras', '_testdata.npz')
+        if os.path.exists(test_data_path):
+            try:
+                test_data = np.load(test_data_path, allow_pickle=True)
+                self.X_test = test_data['X_test']
+                self.age_test = test_data['age_test']
+                print(f"Test data loaded from {test_data_path} ({len(self.age_test)} samples)")
+            except Exception as e:
+                print(f"Warning: Could not load test data: {e}")
+        else:
+            print(f"Warning: Test data file not found at {test_data_path}")
+        
         return self.model

@@ -8,6 +8,7 @@ evaluation, and prediction workflows.
 
 import os
 import cv2
+import numpy as np
 from cnn_model import CNNModel
 from dataset import IMAGE_SIZE, DatasetDownloader
 from image_processing import ImageProcesser
@@ -71,10 +72,23 @@ class AgePrediction:
         face_img_normalized = face_img / 255.0
         face_img_normalized = face_img_normalized.reshape(1, 64, 64, 3)
         
-        # Predict age
-        predicted_age_value = self.cnn_model.model.predict(face_img_normalized, verbose=0)[0][0]
+        # Predict age class (returns probabilities for 8 classes)
+        predictions = self.cnn_model.model.predict(face_img_normalized, verbose=0)[0]
+        predicted_class = np.argmax(predictions)
+        confidence = predictions[predicted_class] * 100
         
-        print(f"\nPredicted age: {predicted_age_value:.1f} years")
+        # Convert class to age range
+        from cnn_model import AGE_CLASSES
+        min_age, max_age = AGE_CLASSES[predicted_class]
+        if max_age is None:
+            age_range = f"{min_age}+"
+            predicted_age_value = min_age + 5  # Use middle of range for display
+        else:
+            age_range = f"{min_age}-{max_age}"
+            predicted_age_value = (min_age + max_age) / 2
+        
+        print(f"\nPredicted age class: {age_range} (confidence: {confidence:.1f}%)")
+        print(f"Estimated age: {predicted_age_value:.0f} years")
         
         # Display result
         DatasetVisualizer.display_prediction(face_img, predicted_age_value)
