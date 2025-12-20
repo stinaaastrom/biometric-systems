@@ -2,7 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+import tensorflow as tf
 
 # Third-party imports
 from sklearn.metrics import confusion_matrix
@@ -10,7 +10,7 @@ from sklearn.metrics import confusion_matrix
 
 
 # TensorFlow/Keras imports
-from keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
+from keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization, GlobalAveragePooling2D
 from keras.models import Model, Sequential, load_model
 from keras.optimizers import Adam
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
@@ -46,62 +46,161 @@ class CNNModel:
                 return idx
         return None
 
+    def _apply_augmentation(self, images):
+        """
+        Apply data augmentation to a batch of images using ImageProcesser.
+        Images should be in range [0, 1] and will be converted to uint8 for augmentation.
+        """
+        from image_processing import ImageProcesser
+        
+        processor = ImageProcesser()
+        transform = processor.get_augmentation_transform()
+        
+        augmented_images = []
+        total = len(images)
+        
+        for idx, img in enumerate(images):
+            # Convert to uint8 for albumentations (expects 0-255)
+            img_uint8 = (img * 255).astype(np.uint8)
+            
+            # Apply augmentation
+            augmented = transform(image=img_uint8)
+            aug_img = augmented['image']
+            
+            # Convert back to float32 in range [0, 1]
+            aug_img = aug_img.astype(np.float32) / 255.0
+            augmented_images.append(aug_img)
+            
+            if (idx + 1) % 500 == 0:
+                print(f"Augmented {idx + 1}/{total} images", end='\r')
+        
+        print(f"Augmented {total}/{total} images ✓")
+        return np.array(augmented_images)
 
-    def build_cnn_model(self):
+
+    def build_cnn_model(self, use_augmentation=True):
+
         # Convert ages to class indices
         train_classes = np.array([self.find_age_class(age) for age in self.age_train])
-        test_classes = np.array([self.find_age_class(age) for age in self.age_test])
-        
-        # One-hot encode
-        y_train = to_categorical(train_classes, num_classes=8)
-        y_test = to_categorical(test_classes, num_classes=8)
-        
-        input_layer = Input(shape=(64, 64, 3))
-        x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_layer)
-        x = BatchNormalization()(x)
-        x = MaxPooling2D((2, 2))(x)
-        x = Dropout(0.25)(x)
-        
-        x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
-        x = BatchNormalization()(x)
-        x = MaxPooling2D((2, 2))(x)
-        x = Dropout(0.25)(x)
-        
-        x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
-        x = BatchNormalization()(x)
-        x = MaxPooling2D((2, 2))(x)
-        x = Dropout(0.25)(x)
-        
-        x = Flatten()(x)
-        x = Dense(256, activation='relu')(x)
-        x = Dropout(0.5)(x)
-        x = Dense(128, activation='relu')(x)
-        x = Dropout(0.5)(x)
+        test_classes  = np.array([self.find_age_class(age) for age in self.age_test])
 
-        # Classification output: 8 age classes
-        age_output = Dense(8, activation='softmax', name='age_output')(x)
+        y_train = to_categorical(train_classes, num_classes=8)
+        y_test  = to_categorical(test_classes, num_classes=8)
+        
+        # Apply data augmentation to training data
+        if use_augmentation:
+            print("Applying data augmentation to training set...")
+            X_train_augmented = self._apply_augmentation(self.X_train)
+        else:
+            X_train_augmented = self.X_train
+
+        input_layer = Input(shape=(224, 224, 3))
+
+        # Preprocessing for ResNet50
+        x = tf.keras.applications.resnet50.preprocess_input(input_layer)
+
+        # Backbone: ResNet50
+        self.base_model = tf.keras.applications.ResNet50(
+            include_top=False,
+            weights="imagenet",
+            input_tensor=x
+        )
+
+        self.base_model.trainable = False
+
+        x = self.base_model.output
+        x = GlobalAveragePooling2D()(x)
+
+        x = Dense(512, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
+
+        x = Dense(256, activation="relu")(x)
+        x = Dropout(0.4)(x)
+
+        age_output = Dense(8, activation="softmax")(x)
 
         self.model = Model(inputs=input_layer, outputs=age_output)
+
         self.model.compile(
-            loss='categorical_crossentropy',
-            optimizer=Adam(learning_rate=0.0005),
-            metrics=['accuracy']
+            optimizer=Adam(learning_rate=1e-3),
+            loss="categorical_crossentropy",
+            metrics=["accuracy"]
         )
 
         self.model.summary()
-        
-        # Callbacks for better training
-        early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
-        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6, verbose=1)
+
+        # -------- FIRST TRAIN --------
+        early_stop_1 = EarlyStopping(
+            monitor="val_loss",
+            patience=10,
+            restore_best_weights=True
+        )
+
+        reduce_lr_1 = ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.3,
+            patience=5,
+            min_lr=1e-6
+        )
 
         self.history = self.model.fit(
-            self.X_train,
-            y_train,
+            X_train_augmented, y_train,
             validation_data=(self.X_test, y_test),
-            epochs=50,
+            epochs=30,
             batch_size=32,
-            callbacks=[early_stop, reduce_lr]
+            callbacks=[early_stop_1, reduce_lr_1]
         )
+
+        # -------- FINE TUNING --------
+        # Unfreeze from conv4_block1 and forward
+        set_trainable = False
+        for layer in self.base_model.layers:
+            if layer.name.startswith("conv4_block1"):
+                set_trainable = True
+
+            if set_trainable:
+                # Keep BatchNorm frozen
+                if isinstance(layer, tf.keras.layers.BatchNormalization):
+                    layer.trainable = False
+                else:
+                    layer.trainable = True
+
+        self.model.compile(
+            optimizer=Adam(learning_rate=1e-6),
+            loss="categorical_crossentropy",
+            metrics=["accuracy", self.age_mae]
+        )
+
+        early_stop_2 = EarlyStopping(
+            monitor="val_loss",
+            patience=8,
+            restore_best_weights=True
+        )
+
+        reduce_lr_2 = ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.3,
+            patience=4,
+            min_lr=1e-6
+        )
+
+        self.history = self.model.fit(
+            X_train_augmented, y_train,
+            validation_data=(self.X_test, y_test),
+            epochs=20,
+            batch_size=32,
+            callbacks=[early_stop_2, reduce_lr_2]
+        )
+
+    def age_mae(y_true, y_pred):
+        class_centers = tf.constant([1, 4, 8, 13, 18, 30, 50, 70], dtype=tf.float32)
+        y_true_age = tf.reduce_sum(y_true * class_centers, axis=1)
+        y_pred_age = tf.reduce_sum(y_pred * class_centers, axis=1)
+        return tf.reduce_mean(tf.abs(y_true_age - y_pred_age))
+
+
+            
 
     def evaluate_model_performance(self, gen_test=None, etn_test=None):
         """

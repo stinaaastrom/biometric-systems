@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from image_processing import ImageProcesser
 import albumentations as A
 
-IMAGE_SIZE = (64, 64)
+IMAGE_SIZE = (224, 224)
 
 # Data augmentation pipeline
 augmentation = A.Compose([
@@ -109,9 +109,10 @@ class DatasetDownloader:
         self.download_facial_age_dataset()
         return self.dataset_utkface, self.dataset_facial_age
     
-    def create_image_age_list(self, max_images_per_class=800):
+    def create_image_age_list(self):
         """
-        Load balanced dataset with equal samples per age class
+        Load all images without balancing. Balancing will be applied only to
+        the training set after train/test split in generate_dataset().
         """
         
         # Try to load from cache
@@ -220,58 +221,12 @@ class DatasetDownloader:
         
         print(f"\nTotal collected: {len(all_images)} images")
         
-        # Now balance by age class
-        from collections import defaultdict
-        age_buckets = defaultdict(list)
-        
-        # Define age classes
-        age_classes = [(0,12), (13,17), (18,25), (26,35), (36,45), (46,60), (61,74), (75, 120)]
-        
-        # Assign each image to an age class
-        for idx, age in enumerate(all_ages):
-            for class_idx, (min_age, max_age) in enumerate(age_classes):
-                if min_age <= age <= max_age:
-                    age_buckets[class_idx].append(idx)
-                    break
-        
-        # Print distribution before balancing
-        print("\nAge class distribution (before balancing):")
-        for class_idx, (min_age, max_age) in enumerate(age_classes):
-            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
-            count = len(age_buckets[class_idx])
-            print(f"  {label}: {count} images")
-        
-        # Balance by sampling equally from each class
-        balanced_indices = []
-        print(f"\nBalancing to {max_images_per_class} images per class...")
-        for class_idx in range(len(age_classes)):
-            indices = age_buckets[class_idx]
-            if len(indices) > max_images_per_class:
-                sampled = random.sample(indices, max_images_per_class)
-            else:
-                sampled = indices
-            balanced_indices.extend(sampled)
-            min_age, max_age = age_classes[class_idx]
-            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
-            print(f"  {label}: {len(sampled)} images")
-        
-        # Create balanced dataset
-        self.images = []
-        self.ages = []
-        self.genders = []
-        self.etnicity = []
-        
-        for idx in balanced_indices:
-            self.images.append(all_images[idx])
-            self.ages.append(all_ages[idx])
-            self.genders.append(all_genders[idx])
-            self.etnicity.append(all_etnicity[idx])
-        
-        # Convert to numpy arrays and normalize
-        self.images = np.array(self.images) / 255.0
-        self.ages = np.array(self.ages, dtype=np.float32)
-        
-        print(f"\nFinal balanced dataset: {len(self.images)} images")
+        # Convert to numpy arrays and normalize (NO balancing here)
+        # Use float32 to reduce memory footprint
+        self.images = np.array(all_images, dtype=np.float32) / 255.0
+        self.ages = np.array(all_ages, dtype=np.float32)
+        self.genders = all_genders
+        self.etnicity = all_etnicity
         
         # Save to cache
         print(f"\nSaving preprocessed data to cache...")
@@ -287,21 +242,76 @@ class DatasetDownloader:
         except Exception as e:
             print(f"Cache save failed: {e}")
 
+    def _balance_dataset(self, X, ages, genders, etnicity):
+        """
+        Balance a dataset by age classes using the smallest class size.
+        """
+        from collections import defaultdict
+        
+        age_buckets = defaultdict(list)
+        age_classes = [(0,12), (13,17), (18,25), (26,35), (36,45), (46,60), (61,74), (75, 120)]
+        
+        # Assign each image to an age class
+        for idx, age in enumerate(ages):
+            for class_idx, (min_age, max_age) in enumerate(age_classes):
+                if min_age <= age <= max_age:
+                    age_buckets[class_idx].append(idx)
+                    break
+        
+        # Print distribution before balancing
+        print("\nAge class distribution (before balancing):")
+        for class_idx, (min_age, max_age) in enumerate(age_classes):
+            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
+            count = len(age_buckets[class_idx])
+            print(f"  {label}: {count} images")
+        
+        # Balance by sampling equally from each class using the smallest class size
+        class_counts = [len(age_buckets[c]) for c in range(len(age_classes))]
+        min_count = min(class_counts) if class_counts else 0
+        balanced_indices = []
+        print(f"\nBalancing to {min_count} images per class (min class size)...")
+        for class_idx in range(len(age_classes)):
+            indices = age_buckets[class_idx]
+            if len(indices) > min_count:
+                sampled = random.sample(indices, min_count)
+            else:
+                sampled = indices
+            balanced_indices.extend(sampled)
+            min_age, max_age = age_classes[class_idx]
+            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
+            print(f"  {label}: {len(sampled)} images")
+        
+        # Create balanced dataset
+        X_balanced = X[balanced_indices] if isinstance(X, np.ndarray) else np.array([X[i] for i in balanced_indices])
+        ages_balanced = ages[balanced_indices] if isinstance(ages, np.ndarray) else np.array([ages[i] for i in balanced_indices])
+        genders_balanced = [genders[i] for i in balanced_indices] if isinstance(genders, list) else genders[balanced_indices]
+        etnicity_balanced = [etnicity[i] for i in balanced_indices] if isinstance(etnicity, list) else etnicity[balanced_indices]
+        
+        print(f"\nBalanced dataset: {len(X_balanced)} images")
+        return X_balanced, ages_balanced, genders_balanced, etnicity_balanced
     
     def generate_dataset(self):
-        """Split age_image dictionary into train and test sets
+        """Load images, split into train/test, then balance only training set
         """
         print("Loading and processing images...")
         self.create_image_age_list()
-        print(f"Loaded {len(self.images)} images")
+        print(f"Loaded {len(self.images)} unbalanced images")
         
-        # Split the data - returns in pairs (train, test) for each input array
+        # Split the data FIRST - returns in pairs (train, test) for each input array
         X_train, X_test, age_train, age_test, gen_train, gen_test, etn_train, etn_test = train_test_split(
             self.images, self.ages, self.genders, self.etnicity, 
             test_size=0.2, random_state=42
         )
         
-        print(f"Split complete: {len(X_train)} train, {len(X_test)} test")
+        print(f"\nSplit complete: {len(X_train)} train, {len(X_test)} test")
+        
+        # Balance ONLY the training set
+        print("\n=== Balancing TRAINING SET ===")
+        X_train, age_train, gen_train, etn_train = self._balance_dataset(
+            X_train, age_train, gen_train, etn_train
+        )
+        
+        print(f"\nFinal datasets: {len(X_train)} train (balanced), {len(X_test)} test (unbalanced)")
         print(f"Age train dtype: {type(age_train[0])}, example: {age_train[0]}")
         
         return X_train, X_test, age_train, age_test, gen_train, gen_test, etn_train, etn_test

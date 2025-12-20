@@ -1,5 +1,7 @@
 import cv2
 import os
+import albumentations as A
+
 
 PADDING = 20
 # Use absolute paths to the model files
@@ -56,3 +58,46 @@ class ImageProcesser:
         
         return img
     
+    def get_augmentation_transform(self):
+        """Returns comprehensive augmentation pipeline for age detection training."""
+        train_transform = A.Compose([
+            A.HorizontalFlip(p=0.5),
+
+            A.Affine(
+                translate_percent={'x': (-0.05, 0.05), 'y': (-0.05, 0.05)},
+                scale=(0.9, 1.1),
+                rotate=(-10, 10),
+                p=0.7
+            ),
+
+            A.RandomBrightnessContrast(
+                brightness_limit=0.2,
+                contrast_limit=0.2,
+                p=0.7
+            ),
+
+            A.HueSaturationValue(
+                hue_shift_limit=10,
+                sat_shift_limit=10,
+                val_shift_limit=10,
+                p=0.5
+            ),
+
+            A.CLAHE(p=0.2),
+
+            A.GaussNoise(p=0.3),
+            A.OneOf([
+                A.GaussianBlur(blur_limit=3),
+                A.MotionBlur(blur_limit=3),
+                A.Sharpen()
+            ], p=0.2),
+
+            A.CoarseDropout(
+                num_holes_range=(1, 2),
+                hole_height_range=(16, 32),
+                hole_width_range=(16, 32),
+                p=0.2
+            )
+        ])
+        
+        return train_transform
