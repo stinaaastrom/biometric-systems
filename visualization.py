@@ -4,7 +4,7 @@ import numpy as np
 from collections import Counter
 import cv2
 
-from core.constants import AGE_CLASSES
+from constants import AGE_CLASSES
 
 class DatasetVisualizer:
     """Visualize dataset distributions for age, gender, and ethnicity"""

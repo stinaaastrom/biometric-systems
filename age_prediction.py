@@ -9,12 +9,12 @@ evaluation, and prediction workflows.
 import os
 import cv2
 import numpy as np
-from models.cnn_model import CNNModel
-from data.dataset_downloader import DatasetDownloader
-from data.dataset_processor import DatasetProcessor
-from utils.image_processing import ImageProcesser
-from utils.visualization import DatasetVisualizer
-from core.constants import IMAGE_SIZE
+from cnn_model import CNNModel
+from dataset_downloader import DatasetDownloader
+from dataset_processor import DatasetProcessor
+from image_processing import ImageProcesser
+from visualization import DatasetVisualizer
+from constants import IMAGE_SIZE
 
 # Default path for saving/loading trained models
 AGE_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models', 'age_model.keras')
@@ -89,7 +89,7 @@ class AgePrediction:
         confidence = predictions[predicted_class] * 100
         
         # Convert class to age range
-        from models.cnn_model import AGE_CLASSES
+        from cnn_model import AGE_CLASSES
         min_age, max_age = AGE_CLASSES[predicted_class]
         if max_age is None:
             age_range = f"{min_age}+"
