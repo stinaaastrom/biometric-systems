@@ -54,8 +54,8 @@ class AgePrediction:
             etn_test=test_etnicity
         )
         
-        # Train model - fewer epochs for fast iteration
-        self.cnn_model.build_cnn_model(epochs_phase1=5, epochs_phase2=3)
+        # Train model - use 20 epochs for faster training
+        self.cnn_model.build_cnn_model(epochs=20)
         
         print("\n✓ Training complete!")
 
