@@ -11,8 +11,13 @@ face_model = os.path.join(MODEL_DIR, "opencv_face_detector_uint8.pb")
 
 
 class ImageProcesser:
+        
     def __init__(self):
         self.face_net = cv2.dnn.readNetFromTensorflow(face_model, face_proto)
+
+    def normalize_image(self, img):
+        """Normalize image to [0, 1] float32."""
+        return img.astype('float32') / 255.0
 
     def detect_crop_faces(self, frame, conf_threshold=0.7):
         """Face detetion using deep learning, image based technique."""
@@ -43,20 +48,22 @@ class ImageProcesser:
         return face
     
     
-    def image_enhancements(self, img):
-        # Convert to YUV color space
-        img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
-        
-        # Apply CLAHE (better than simple histogram equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        img_yuv[:,:,0] = clahe.apply(img_yuv[:,:,0])
-        
-        # Convert back to BGR
-        img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-        
+    def image_enhancements(self, img, target_size=None):
+        # Resize if needed
+        if target_size is not None and img.shape[0:2] != target_size:
+            img = cv2.resize(img, target_size)
+        # Convert BGR (cv2 default) to RGB
+        if len(img.shape) == 3 and img.shape[2] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Convert to YUV color space
+            img_yuv = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+            # Apply CLAHE (better than simple histogram equalization)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            img_yuv[:,:,0] = clahe.apply(img_yuv[:,:,0])
+            # Convert back to RGB
+            img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2RGB)
         # Gaussian blur to reduce noise
         img = cv2.GaussianBlur(img, (3, 3), 0)
-        
         return img
     
     def get_augmentation_transform(self):

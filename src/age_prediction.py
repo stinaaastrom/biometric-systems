@@ -54,7 +54,7 @@ class AgePrediction:
         )
         
         # Train model (generators handle data loading and augmentation)
-        self.cnn_model.build_cnn_model(epochs_phase1=30, epochs_phase2=20)
+        self.cnn_model.build_cnn_model(epochs=60)
         
         print("\n✓ Training complete!")
 
