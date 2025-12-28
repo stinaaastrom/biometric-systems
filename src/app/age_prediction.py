@@ -38,23 +38,24 @@ class AgePrediction:
         # Ensure datasets exist, then preprocess and build generators
         downloader = DatasetDownloader()  # download + folder management
         processor = DatasetProcessor(downloader.dataset_utkface, downloader.dataset_facial_age)
-        train_gen, test_gen, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset()
+        X_train, y_train, X_test, y_test, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset(batch_size=32)
         
         # Visualize initial dataset distribution
         visualizer = DatasetVisualizer(train_ages, train_genders, train_etnicity)
         visualizer.show_initial_visuals()
         
-        # Create model with generators and demographic data
+        # Create model with array data (much faster than generators!)
         self.cnn_model = CNNModel(
-            train_generator=train_gen,
-            test_generator=test_gen,
-            age_test=test_ages,
+            X_train=X_train,
+            age_train=y_train,
+            X_test=X_test,
+            age_test=y_test,  # Use one-hot encoded test labels
             gen_test=test_genders,
             etn_test=test_etnicity
         )
         
-        # Train model (generators handle data loading and augmentation)
-        self.cnn_model.build_cnn_model(epochs_phase1=30, epochs_phase2=20)
+        # Train model - fewer epochs for fast iteration
+        self.cnn_model.build_cnn_model(epochs_phase1=5, epochs_phase2=3)
         
         print("\n✓ Training complete!")
 

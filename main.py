@@ -10,9 +10,7 @@ import sys
 # Add src directory to path
 sys.path.insert(0, 'src')
 
-from age_prediction import AgePrediction
-
-from age_prediction import AgePrediction
+from app.age_prediction import AgePrediction
 
 
 def main():

@@ -5,7 +5,7 @@ import albumentations as A
 
 PADDING = 20
 # Use absolute paths to the model files
-MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models_pretrained")
+MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models_pretrained")
 face_proto = os.path.join(MODEL_DIR, "opencv_face_detector.pbtxt")
 face_model = os.path.join(MODEL_DIR, "opencv_face_detector_uint8.pb")
 
@@ -32,7 +32,8 @@ class ImageProcesser:
                 face_boxes.append([x1, y1, x2, y2])
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), int(round(frame_height/150)), 8)
 
-        # Crop image with padding        
+        # Crop image with padding
+        face = None
         for (x1, y1, x2, y2) in face_boxes:
             face = frame[
                 max(0, y1-PADDING):min(y2+PADDING, frame.shape[0]-1),
@@ -62,36 +63,30 @@ class ImageProcesser:
         """Returns comprehensive augmentation pipeline for age detection training."""
         train_transform = A.Compose([
             A.HorizontalFlip(p=0.5),
-
             A.Affine(
                 translate_percent={'x': (-0.05, 0.05), 'y': (-0.05, 0.05)},
                 scale=(0.9, 1.1),
                 rotate=(-10, 10),
                 p=0.7
             ),
-
             A.RandomBrightnessContrast(
                 brightness_limit=0.2,
                 contrast_limit=0.2,
                 p=0.7
             ),
-
             A.HueSaturationValue(
                 hue_shift_limit=10,
                 sat_shift_limit=10,
                 val_shift_limit=10,
                 p=0.5
             ),
-
             A.CLAHE(p=0.2),
-
             A.GaussNoise(p=0.3),
             A.OneOf([
                 A.GaussianBlur(blur_limit=3),
                 A.MotionBlur(blur_limit=3),
                 A.Sharpen()
             ], p=0.2),
-
             A.CoarseDropout(
                 num_holes_range=(1, 2),
                 hole_height_range=(16, 32),
@@ -99,5 +94,5 @@ class ImageProcesser:
                 p=0.2
             )
         ])
-        
         return train_transform
+
