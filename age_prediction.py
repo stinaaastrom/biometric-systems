@@ -71,7 +71,8 @@ class AgePrediction:
         
         # Process image
         image_processor = ImageProcesser()
-        face_img = image_processor.detect_crop_faces(frame)
+        #face_img = image_processor.detect_crop_faces(frame)
+        face_img = frame
         if face_img is None:
             print("Error: Could not detect face in image")
             return
