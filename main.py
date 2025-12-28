@@ -9,6 +9,11 @@ import sys
 
 # Add src directory to path
 sys.path.insert(0, 'src')
+import sys
+import os
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
+
 
 from app.age_prediction import AgePrediction
 
