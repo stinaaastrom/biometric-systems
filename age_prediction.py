@@ -34,29 +34,32 @@ class AgePrediction:
         print("\n" + "="*60)
         print("STARTING AGE PREDICTION MODEL TRAINING")
         print("="*60)
-        
+
         # Ensure datasets exist, then preprocess and build generators
         downloader = DatasetDownloader()  # download + folder management
         processor = DatasetProcessor(downloader.dataset_utkface, downloader.dataset_facial_age)
-        X_train, y_train, X_test, y_test, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset(batch_size=32)
-        
+
+        # 1. Preprocess and save all images (utan augmentation)
+        processor.preprocess_and_save(output_dir='data/preprocessed_faces')
+
+        # 2. Bygg generatorer (augmentation sker i generatorn)
+        train_gen, test_gen, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset(batch_size=32, use_generator=True)
+
         # Visualize initial dataset distribution
         visualizer = DatasetVisualizer(train_ages, train_genders, train_etnicity)
         visualizer.show_initial_visuals()
-        
-        # Create model with array data (much faster than generators!)
+
+        # Skapa och träna modellen med generatorer
         self.cnn_model = CNNModel(
-            X_train=X_train,
-            age_train=y_train,
-            X_test=X_test,
-            age_test=y_test,  # Use one-hot encoded test labels
+            train_generator=train_gen,
+            test_generator=test_gen,
             gen_test=test_genders,
             etn_test=test_etnicity
         )
-        
+
         # Train model - use 20 epochs for faster training
         self.cnn_model.build_cnn_model(epochs=20)
-        
+
         print("\n✓ Training complete!")
 
     def predict_age(self, img_path):

@@ -15,8 +15,36 @@ FACIAL_AGE_PATH = os.path.join(DATA_FOLDER, 'facial_age')
 PROCESSED_FACES_PATH = os.path.join(DATA_FOLDER, 'processed_faces')
 
 
+
 class DatasetProcessor:
     """Preprocessing, face crop, metadata scanning and generator building."""
+
+    def preprocess_and_save(self, output_dir='data/preprocessed_faces'):
+        """
+        Förbehandla (enhancements, normalisering, resize) och spara alla bilder till output_dir.
+        """
+        import shutil
+        os.makedirs(output_dir, exist_ok=True)
+        self.ensure_preprocessed_faces()
+        self.create_image_age_list(use_processed=True)
+        meta = []
+        for img_path, age, gender, etnicity in zip(self.image_paths, self.ages, self.genders, self.etnicity):
+            fname = os.path.basename(img_path)
+            dest_path = os.path.join(output_dir, fname)
+            if not os.path.exists(dest_path):
+                img = cv2.imread(img_path)
+                if img is not None:
+                    img = self.image_processor.image_enhancements(img, target_size=None)
+                    img = cv2.resize(img, IMAGE_SIZE)
+                    img = self.image_processor.normalize_image(img)
+                    img = (img * 255).astype(np.uint8)
+                    cv2.imwrite(dest_path, img)
+            meta.append({'filename': fname, 'age': float(age), 'gender': str(gender), 'etnicity': str(etnicity)})
+        # Spara metadata
+        import json
+        with open(os.path.join(output_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        print(f"✓ Preprocessed {len(meta)} images to {output_dir}")
 
     def __init__(self, dataset_utkface: str = UTKFACE_PATH, dataset_facial_age: str = FACIAL_AGE_PATH,
                  processed_root: str = PROCESSED_FACES_PATH):
@@ -279,30 +307,175 @@ class DatasetProcessor:
                 return idx
         return None
 
-    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=True, overwrite_preprocess=False):
+    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=True, overwrite_preprocess=False, use_balanced=True, use_generator=True):
         """
         Prepare train/test generators using pre-cropped faces on disk.
         """
-        self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
-        self.create_image_age_list(use_processed=True)
-        age_classes = np.array([self._age_to_class(age) for age in self.ages])
-        indices = np.arange(len(self.image_paths))
+        import os
+        import glob
+        import json
+        balanced_dir = os.path.join('data', 'balanced_faces')
+        balanced_metadata_path = os.path.join(balanced_dir, 'metadata.json')
+        use_balanced_data = use_balanced and os.path.isdir(balanced_dir) and len(glob.glob(os.path.join(balanced_dir, '*.jpg'))) > 0 and os.path.exists(balanced_metadata_path)
+
+        if use_balanced_data:
+            print(f"\nLaddar balanserade träningsbilder direkt från {balanced_dir} ...")
+            # Läs metadata
+            with open(balanced_metadata_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            train_paths = np.array([os.path.join(balanced_dir, fname) for fname in meta['filenames']])
+            train_ages = np.array(meta['ages'], dtype=np.float32)
+            train_genders = np.array(meta['genders'])
+            train_etnicity = np.array(meta['etnicity'])
+            # Ladda testdata som vanligt
+            self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
+            self.create_image_age_list(use_processed=True)
+            age_classes = np.array([self._age_to_class(age) for age in self.ages])
+            indices = np.arange(len(self.image_paths))
+            _, test_idx = train_test_split(
+                indices,
+                test_size=test_size,
+                random_state=42,
+                stratify=age_classes
+            )
+            test_paths = self.image_paths[test_idx]
+            test_ages = self.ages[test_idx]
+            test_genders = self.genders[test_idx]
+            test_etnicity = self.etnicity[test_idx]
+        else:
+            self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
+            self.create_image_age_list(use_processed=True)
+            age_classes = np.array([self._age_to_class(age) for age in self.ages])
+            indices = np.arange(len(self.image_paths))
+            train_idx, test_idx = train_test_split(
+                indices,
+                test_size=test_size,
+                random_state=42,
+                stratify=age_classes
+            )
+            if balance_train:
+                train_idx = self._balance_indices(train_idx)
+                # Spara balanserade träningsbilder till data/balanced_faces/ och metadata
+                import shutil
+                os.makedirs(balanced_dir, exist_ok=True)
+                print(f"\nSparar balanserade träningsbilder till {balanced_dir} ...")
+                filenames = []
+                ages = []
+                genders = []
+                etnicity = []
+                for idx in train_idx:
+                    img_path = self.image_paths[idx]
+                    fname = os.path.basename(img_path)
+                    dest_path = os.path.join(balanced_dir, fname)
+                    if not os.path.exists(dest_path):
+                        try:
+                            shutil.copy2(img_path, dest_path)
+                        except Exception as e:
+                            print(f"Kunde inte kopiera {img_path} -> {dest_path}: {e}")
+                    filenames.append(fname)
+                    ages.append(float(self.ages[idx]))
+                    genders.append(str(self.genders[idx]))
+                    etnicity.append(str(self.etnicity[idx]))
+                # Spara metadata
+                with open(balanced_metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'filenames': filenames,
+                        'ages': ages,
+                        'genders': genders,
+                        'etnicity': etnicity
+                    }, f, indent=2, ensure_ascii=False)
+                print(f"✓ Metadata sparad till {balanced_metadata_path}")
+            train_paths = self.image_paths[train_idx]
+            train_ages = self.ages[train_idx]
+            train_genders = self.genders[train_idx]
+            train_etnicity = self.etnicity[train_idx]
+            test_paths = self.image_paths[test_idx]
+            test_ages = self.ages[test_idx]
+            test_genders = self.genders[test_idx]
+            test_etnicity = self.etnicity[test_idx]
+
+        # Läs preprocessed metadata
+        import json
+        pre_dir = os.path.join('data', 'preprocessed_faces')
+        with open(os.path.join(pre_dir, 'metadata.json'), 'r', encoding='utf-8') as f:
+            meta = json.load(f)
+        all_paths = np.array([os.path.join(pre_dir, m['filename']) for m in meta])
+        all_ages = np.array([m['age'] for m in meta], dtype=np.float32)
+        all_genders = np.array([m['gender'] for m in meta])
+        all_etnicity = np.array([m['etnicity'] for m in meta])
+        # One-hot labels
+        from keras.utils import to_categorical
+        age_classes = np.array([self._age_to_class(age) for age in all_ages])
+        labels = to_categorical(age_classes, num_classes=8)
+        indices = np.arange(len(all_paths))
         train_idx, test_idx = train_test_split(
             indices,
             test_size=test_size,
             random_state=42,
             stratify=age_classes
         )
-        if balance_train:
-            train_idx = self._balance_indices(train_idx)
-        train_paths = self.image_paths[train_idx]
-        train_ages = self.ages[train_idx]
-        train_genders = self.genders[train_idx]
-        train_etnicity = self.etnicity[train_idx]
-        test_paths = self.image_paths[test_idx]
-        test_ages = self.ages[test_idx]
-        test_genders = self.genders[test_idx]
-        test_etnicity = self.etnicity[test_idx]
+        train_paths = all_paths[train_idx]
+        train_labels = labels[train_idx]
+        test_paths = all_paths[test_idx]
+        test_labels = labels[test_idx]
+        train_ages = all_ages[train_idx]
+        train_genders = all_genders[train_idx]
+        train_etnicity = all_etnicity[train_idx]
+        test_ages = all_ages[test_idx]
+        test_genders = all_genders[test_idx]
+        test_etnicity = all_etnicity[test_idx]
+
+        if use_generator:
+            from data_generator import ImageDiskGenerator
+            train_gen = ImageDiskGenerator(train_paths, train_labels, batch_size=batch_size, augment=True, shuffle=True)
+            test_gen = ImageDiskGenerator(test_paths, test_labels, batch_size=batch_size, augment=False, shuffle=False)
+            return (
+                train_gen,
+                test_gen,
+                train_paths,
+                train_ages,
+                train_genders,
+                train_etnicity,
+                test_paths,
+                test_ages,
+                test_genders,
+                test_etnicity,
+            )
+        else:
+            # Fallback: ladda allt i RAM (ej rekommenderat)
+            import cv2
+            from image_processing import ImageProcesser
+            image_processor = ImageProcesser()
+            train_images = []
+            for img_path in train_paths:
+                img = cv2.imread(img_path)
+                if img is not None:
+                    img = image_processor.image_enhancements(img, target_size=None)
+                    img = image_processor.normalize_image(img)
+                    train_images.append(img)
+            train_images = np.array(train_images, dtype=np.float32)
+            test_images = []
+            for img_path in test_paths:
+                img = cv2.imread(img_path)
+                if img is not None:
+                    img = image_processor.image_enhancements(img, target_size=None)
+                    img = image_processor.normalize_image(img)
+                    test_images.append(img)
+            test_images = np.array(test_images, dtype=np.float32)
+            return (
+                train_images,
+                train_labels,
+                test_images,
+                test_labels,
+                train_paths,
+                train_ages,
+                train_genders,
+                train_etnicity,
+                test_paths,
+                test_ages,
+                test_genders,
+                test_etnicity,
+            )
         
         # Use image_processing functions for resizing, normalization, and augmentation
         from keras.utils import to_categorical
