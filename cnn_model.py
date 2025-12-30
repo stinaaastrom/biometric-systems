@@ -133,31 +133,33 @@ class CNNModel:
 
             
 
+
     def evaluate_model_performance(self, gen_test=None, etn_test=None):
         """
         Evaluate model performance by comparing age class predictions.
         Supports both array-based test data and Keras generators.
         """
 
-        # --------------------------------------------------
         # 1. PREDICTIONS + TRUE LABELS
-        # --------------------------------------------------
-        if isinstance(self.X_test, np.ndarray) and self.X_test.ndim >= 3:
-            # ---------- ARRAY-BASERAD TESTDATA ----------
+        if self.X_test is not None and isinstance(self.X_test, np.ndarray) and self.X_test.ndim >= 3:
             print("Making predictions on array-based test data...")
             predictions = self.model.predict(self.X_test)
             predicted_classes = np.argmax(predictions, axis=1)
-
             actual_classes = np.argmax(self.age_test, axis=1)
-            print("actual classes", actual_classes)
-            print("actual classes", predicted_classes)
-
-            # Filtrera bort ogiltiga åldrar (None)
+            valid_mask = actual_classes != None
+            predicted_classes = predicted_classes[valid_mask]
+            actual_classes = actual_classes[valid_mask].astype(int)
+        elif self.test_generator is not None:
+            print("Making predictions on generator-based test data...")
+            predictions = self.model.predict(self.test_generator)
+            # test_generator.labels är one-hot
+            actual_classes = np.argmax(self.test_generator.labels, axis=1)
+            predicted_classes = np.argmax(predictions, axis=1)
             valid_mask = actual_classes != None
             predicted_classes = predicted_classes[valid_mask]
             actual_classes = actual_classes[valid_mask].astype(int)
         else:
-            raise ValueError("No test data available (X_test required).")
+            raise ValueError("No test data available (X_test or test_generator required).")
 
         # Säkerhetskontroll
         if len(predicted_classes) != len(actual_classes):
