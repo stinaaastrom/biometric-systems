@@ -5,23 +5,22 @@ import albumentations as A
 
 PADDING = 20
 # Use absolute paths to the model files
-#MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models_pretrained")
-#face_proto = os.path.join(MODEL_DIR, "opencv_face_detector.pbtxt")
-#face_model = os.path.join(MODEL_DIR, "opencv_face_detector_uint8.pb")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "models_pretrained")
+face_proto = os.path.join(MODEL_DIR, "opencv_face_detector.pbtxt")
+face_model = os.path.join(MODEL_DIR, "opencv_face_detector_uint8.pb")
 
 
 class ImageProcesser:
         
     def __init__(self):
-        #self.face_net = cv2.dnn.readNetFromTensorflow(face_model, face_proto)
-        pass
+        self.face_net = cv2.dnn.readNetFromTensorflow(face_model, face_proto)
+        
 
     def normalize_image(self, img):
         """Normalize image to [0, 1] float32."""
         return img.astype('float32') / 255.0
-    """
     def detect_crop_faces(self, frame, conf_threshold=0.7):
-        Face detetion using deep learning, image based technique
+        """Face detetion using deep learning, image based technique"""
         frame_height = frame.shape[0]
         frame_width = frame.shape[1]
         blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), [104, 117, 123], False, False)
@@ -47,7 +46,6 @@ class ImageProcesser:
             ]
 
         return face
-    """
     
     def image_enhancements(self, img, target_size=None):
         # Resize if needed

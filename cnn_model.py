@@ -4,6 +4,14 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy('mixed_float16')
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.applications.efficientnet import preprocess_input
+from tensorflow.keras.layers import Input, Lambda
+
 
 
 # Check available GPUs
@@ -80,41 +88,69 @@ class CNNModel:
 
 
 
-    def build_cnn_model(self, epochs=60):
-        """Bygger och tränar CNN-modellen med angivet antal epochs (default 60)."""
-        final_cnn = Sequential()
-        final_cnn.add(Conv2D(filters=32, kernel_size=3, activation='relu', input_shape=(224, 224, 3)))
-        final_cnn.add(AveragePooling2D(pool_size=(2,2)))
-        final_cnn.add(Conv2D(filters=64, kernel_size=3, activation='relu'))
-        final_cnn.add(AveragePooling2D(pool_size=(2,2)))
-        final_cnn.add(Conv2D(filters=128, kernel_size=3, activation='relu'))
-        final_cnn.add(AveragePooling2D(pool_size=(2,2)))
-        final_cnn.add(Conv2D(filters=256, kernel_size=3, activation='relu'))
-        final_cnn.add(AveragePooling2D(pool_size=(2,2)))
-        final_cnn.add(GlobalAveragePooling2D())
-        final_cnn.add(Dense(132, activation='relu'))
-        final_cnn.add(Dense(8, activation='softmax'))
-        final_cnn.summary()
 
-        final_cnn.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3):
+        """
+        Bygger och tränar EfficientNet-modellen i två steg:
+        1. Feature extractor (frys backbone, träna topplager)
+        2. Fine-tuning (tina sista 20-30% av backbone)
+        """
+    
+        
 
-        # Träna modellen
+        inputs = Input(shape=(224, 224, 3))
+        x = Lambda(preprocess_input)(inputs)
+        base_model = EfficientNetB0(include_top=False, input_tensor=x, weights="imagenet")
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+        x = Dropout(0.3)(x)
+        x = Dense(128, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
+
+        output = Dense(8, activation="softmax")(x)
+        model = Model(inputs=base_model.input, outputs=output)
+
+        # Steg 1: Frys hela backbone
+        for layer in base_model.layers:
+            layer.trainable = False
+
+        model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
+        model.summary()
+
+        callbacks = [
+            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
+        ]
+
         if self.train_generator is not None and self.test_generator is not None:
-            self.history = final_cnn.fit(
+            print("\n--- Steg 1: Feature extractor (frys backbone, träna topplager) ---")
+            self.history = model.fit(
                 self.train_generator,
                 validation_data=self.test_generator,
-                epochs=epochs
-            )
-        elif self.X_train is not None and self.age_train is not None:
-            self.history = final_cnn.fit(
-                self.X_train, self.age_train,
-                validation_data=(self.X_test, self.age_test) if self.X_test is not None and self.age_test is not None else None,
-                epochs=epochs
+                epochs=epochs_stage1,
+                callbacks=callbacks
             )
         else:
             raise ValueError("Ingen träningsdata tillgänglig.")
 
-        self.model = final_cnn
+        # Steg 2: Fine-tuning (tina sista 20-30% av backbone)
+        n_layers = len(base_model.layers)
+        n_unfreeze = int(n_layers * fine_tune_percent)
+        for layer in base_model.layers[-n_unfreeze:]:
+            layer.trainable = True
+
+        model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
+
+        print(f"\n--- Steg 2: Fine-tuning (tina sista {fine_tune_percent*100:.0f}% av backbone) ---")
+        self.history_finetune = model.fit(
+            self.train_generator,
+            validation_data=self.test_generator,
+            epochs=epochs_stage2,
+            callbacks=callbacks
+        )
+
+        self.model = model
 
 
 

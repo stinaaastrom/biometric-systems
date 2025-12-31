@@ -25,13 +25,11 @@ class ImageDiskGenerator(keras.utils.Sequence):
         for img_path in batch_paths:
             img = cv2.imread(img_path)
             if img is not None:
-                img = self.image_processor.image_enhancements(img, target_size=None)
                 if self.aug_transform is not None:
                     try:
                         img = self.aug_transform(image=img)['image']
                     except Exception:
                         pass
-                img = self.image_processor.normalize_image(img)
                 images.append(img)
         images = np.array(images, dtype=np.float32)
         return images, batch_labels
