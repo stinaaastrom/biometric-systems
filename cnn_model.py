@@ -8,7 +8,7 @@ from tensorflow.keras.applications import EfficientNetB0
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, Callback
 from tensorflow.keras.applications.efficientnet import preprocess_input
 from tensorflow.keras.layers import Input, Lambda
 
@@ -32,6 +32,28 @@ from constants import AGE_CLASSES
 # Default path for model files (absolute path)
 import os
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models', 'age_model.keras')
+
+
+class EveryNEpochCheckpoint(Callback):
+    """Saves model weights every Nth epoch using a formatted filepath."""
+
+    def __init__(self, filepath, every_n_epochs=1):
+        super().__init__()
+        self.filepath = filepath
+        self.every_n_epochs = max(1, every_n_epochs)
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        # epoch is zero-based; add 1 for human-friendly numbering
+        if (epoch + 1) % self.every_n_epochs != 0:
+            return
+
+        filepath = self.filepath.format(
+            epoch=epoch + 1,
+            val_loss=logs.get("val_loss", 0.0)
+        )
+        self.model.save_weights(filepath)
+        print(f"\n✓ Saved checkpoint: {filepath}")
 
 class CNNModel:
     
@@ -99,8 +121,8 @@ class CNNModel:
         # Skapa checkpoint-mapp om den inte finns
         os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # Kolla om det finns en tidigare checkpoint att ladda
-        latest_checkpoint = self._get_latest_checkpoint(checkpoint_dir)
+        # Kolla om det finns en tidigare checkpoint att ladda (stage 1)
+        latest_checkpoint = self._get_latest_checkpoint(checkpoint_dir, stage='stage1')
 
         inputs = Input(shape=(224, 224, 3))
         x = Lambda(preprocess_input)(inputs)
@@ -134,12 +156,9 @@ class CNNModel:
         model.summary()
 
         # Checkpoint callback för Stage 1 - sparar var 10:e epoch
-        checkpoint_stage1 = ModelCheckpoint(
-            filepath=os.path.join(checkpoint_dir, 'stage1_epoch{epoch:02d}-val_loss{val_loss:.4f}.keras'),
-            save_freq='epoch',
-            save_weights_only=False,
-            period=10,  # Spara var 10:e epoch
-            verbose=1
+        checkpoint_stage1 = EveryNEpochCheckpoint(
+            filepath=os.path.join(checkpoint_dir, 'stage1_epoch{epoch:02d}-val_loss{val_loss:.4f}.weights.h5'),
+            every_n_epochs=10
         )
         
         callbacks = [
@@ -150,10 +169,12 @@ class CNNModel:
 
         if self.train_generator is not None and self.test_generator is not None:
             print("\n--- Steg 1: Feature extractor (frys backbone, träna topplager) ---")
+            # Fortsätt minst en epoch utöver checkpointen för att undvika noll träningssteg
+            target_epochs_stage1 = max(epochs_stage1, initial_epoch_stage1 + 1)
             self.history = model.fit(
                 self.train_generator,
                 validation_data=self.test_generator,
-                epochs=epochs_stage1,
+                epochs=target_epochs_stage1,
                 initial_epoch=initial_epoch_stage1,
                 callbacks=callbacks
             )
@@ -179,12 +200,9 @@ class CNNModel:
             print(f"  Fortsätter från epoch {initial_epoch_stage2}")
         
         # Checkpoint callback för Stage 2
-        checkpoint_stage2 = ModelCheckpoint(
-            filepath=os.path.join(checkpoint_dir, 'stage2_epoch{epoch:02d}-val_loss{val_loss:.4f}.keras'),
-            save_freq='epoch',
-            save_weights_only=False,
-            period=10,
-            verbose=1
+        checkpoint_stage2 = EveryNEpochCheckpoint(
+            filepath=os.path.join(checkpoint_dir, 'stage2_epoch{epoch:02d}-val_loss{val_loss:.4f}.weights.h5'),
+            every_n_epochs=10
         )
         
         callbacks_stage2 = [
@@ -194,10 +212,11 @@ class CNNModel:
         ]
 
         print(f"\n--- Steg 2: Fine-tuning (tina sista {fine_tune_percent*100:.0f}% av backbone) ---")
+        target_epochs_stage2 = max(epochs_stage2, initial_epoch_stage2 + 1)
         self.history_finetune = model.fit(
             self.train_generator,
             validation_data=self.test_generator,
-            epochs=epochs_stage2,
+            epochs=target_epochs_stage2,
             initial_epoch=initial_epoch_stage2,
             callbacks=callbacks_stage2
         )
@@ -210,18 +229,19 @@ class CNNModel:
         """Hitta senaste checkpoint-fil i checkpoint-mappen."""
         if not os.path.exists(checkpoint_dir):
             return None
-        
+
+        checkpoint_exts = ('.weights.h5', '.ckpt')
         checkpoints = []
         for f in os.listdir(checkpoint_dir):
-            if f.endswith('.keras'):
-                if stage and stage not in f:
-                    continue
-                checkpoints.append(os.path.join(checkpoint_dir, f))
-        
+            if not f.endswith(checkpoint_exts):
+                continue
+            if stage and stage not in f:
+                continue
+            checkpoints.append(os.path.join(checkpoint_dir, f))
+
         if not checkpoints:
             return None
-        
-        # Sortera efter modifieringstid, returnera senaste
+
         checkpoints.sort(key=lambda x: os.path.getmtime(x), reverse=True)
         return checkpoints[0]
 
