@@ -8,7 +8,7 @@ from tensorflow.keras.applications import EfficientNetB0
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.applications.efficientnet import preprocess_input
 from tensorflow.keras.layers import Input, Lambda
 
@@ -89,14 +89,18 @@ class CNNModel:
 
 
 
-    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3):
+    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3, checkpoint_dir='models/checkpoints'):
         """
         Bygger och tränar EfficientNet-modellen i två steg:
         1. Feature extractor (frys backbone, träna topplager)
         2. Fine-tuning (tina sista 20-30% av backbone)
         """
     
+        # Skapa checkpoint-mapp om den inte finns
+        os.makedirs(checkpoint_dir, exist_ok=True)
         
+        # Kolla om det finns en tidigare checkpoint att ladda
+        latest_checkpoint = self._get_latest_checkpoint(checkpoint_dir)
 
         inputs = Input(shape=(224, 224, 3))
         x = Lambda(preprocess_input)(inputs)
@@ -116,9 +120,30 @@ class CNNModel:
             layer.trainable = False
 
         model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
+        
+        # Ladda checkpoint om den finns
+        initial_epoch_stage1 = 0
+        if latest_checkpoint and 'stage1' in latest_checkpoint:
+            print(f"\n✓ Laddar checkpoint: {latest_checkpoint}")
+            model.load_weights(latest_checkpoint)
+            # Extrahera epoch-nummer från filnamnet
+            epoch_str = latest_checkpoint.split('epoch')[-1].split('-')[0]
+            initial_epoch_stage1 = int(epoch_str)
+            print(f"  Fortsätter från epoch {initial_epoch_stage1}")
+        
         model.summary()
 
+        # Checkpoint callback för Stage 1 - sparar var 10:e epoch
+        checkpoint_stage1 = ModelCheckpoint(
+            filepath=os.path.join(checkpoint_dir, 'stage1_epoch{epoch:02d}-val_loss{val_loss:.4f}.keras'),
+            save_freq='epoch',
+            save_weights_only=False,
+            period=10,  # Spara var 10:e epoch
+            verbose=1
+        )
+        
         callbacks = [
+            checkpoint_stage1,
             EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
             ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
         ]
@@ -129,6 +154,7 @@ class CNNModel:
                 self.train_generator,
                 validation_data=self.test_generator,
                 epochs=epochs_stage1,
+                initial_epoch=initial_epoch_stage1,
                 callbacks=callbacks
             )
         else:
@@ -141,18 +167,63 @@ class CNNModel:
             layer.trainable = True
 
         model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
+        
+        # Kolla om det finns checkpoint för stage 2
+        latest_checkpoint_stage2 = self._get_latest_checkpoint(checkpoint_dir, stage='stage2')
+        initial_epoch_stage2 = 0
+        if latest_checkpoint_stage2:
+            print(f"\n✓ Laddar Stage 2 checkpoint: {latest_checkpoint_stage2}")
+            model.load_weights(latest_checkpoint_stage2)
+            epoch_str = latest_checkpoint_stage2.split('epoch')[-1].split('-')[0]
+            initial_epoch_stage2 = int(epoch_str)
+            print(f"  Fortsätter från epoch {initial_epoch_stage2}")
+        
+        # Checkpoint callback för Stage 2
+        checkpoint_stage2 = ModelCheckpoint(
+            filepath=os.path.join(checkpoint_dir, 'stage2_epoch{epoch:02d}-val_loss{val_loss:.4f}.keras'),
+            save_freq='epoch',
+            save_weights_only=False,
+            period=10,
+            verbose=1
+        )
+        
+        callbacks_stage2 = [
+            checkpoint_stage2,
+            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
+        ]
 
         print(f"\n--- Steg 2: Fine-tuning (tina sista {fine_tune_percent*100:.0f}% av backbone) ---")
         self.history_finetune = model.fit(
             self.train_generator,
             validation_data=self.test_generator,
             epochs=epochs_stage2,
-            callbacks=callbacks
+            initial_epoch=initial_epoch_stage2,
+            callbacks=callbacks_stage2
         )
 
         self.model = model
 
 
+
+    def _get_latest_checkpoint(self, checkpoint_dir, stage=None):
+        """Hitta senaste checkpoint-fil i checkpoint-mappen."""
+        if not os.path.exists(checkpoint_dir):
+            return None
+        
+        checkpoints = []
+        for f in os.listdir(checkpoint_dir):
+            if f.endswith('.keras'):
+                if stage and stage not in f:
+                    continue
+                checkpoints.append(os.path.join(checkpoint_dir, f))
+        
+        if not checkpoints:
+            return None
+        
+        # Sortera efter modifieringstid, returnera senaste
+        checkpoints.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        return checkpoints[0]
 
     from keras.saving import register_keras_serializable
 

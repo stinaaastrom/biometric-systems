@@ -58,7 +58,7 @@ class AgePrediction:
         )
 
         # Train model - use 20 epochs for faster training
-        self.cnn_model.build_cnn_model(epochs_stage1=10, epochs_stage2=25)
+        self.cnn_model.build_cnn_model(epochs_stage1=10, epochs_stage2=20)
 
         print("\n✓ Training complete!")
 
