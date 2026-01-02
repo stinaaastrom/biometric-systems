@@ -21,8 +21,18 @@ class Evaluation:
         self.age_classes = age_classes
         self.find_age_class_fn = find_age_class_fn
 
-    def _predict(self, model, X_test):
-        return model.predict(X_test).flatten()
+    def _predict(self, model, X_test=None, test_generator=None):
+        """Get predictions from model using either generator or array."""
+        if test_generator is not None:
+            # Generator-based prediction
+            print("Running predictions from generator...")
+            predictions = model.predict(test_generator)
+            return predictions.flatten()
+        elif X_test is not None:
+            # Array-based prediction
+            return model.predict(X_test).flatten()
+        else:
+            raise ValueError("Either X_test or test_generator must be provided")
 
     def _print_summary(self, actual_classes, predicted_classes, predictions_len):
         valid_mask = (actual_classes != None) & (predicted_classes != None)
@@ -250,18 +260,68 @@ class Evaluation:
         print(f"Saved {n} worst predictions to: {output_dir}")
         return n, output_dir
 
-    def evaluate(self, model, X_test, age_test, history, gen_test=None, etn_test=None, *, top_n=10, output_dir=None):
-        predictions = self._predict(model, X_test)
+    def evaluate(self, model, X_test=None, age_test=None, history=None, test_generator=None, gen_test=None, etn_test=None, *, top_n=10, output_dir=None):
+        """
+        Evaluate model performance using either generator or array-based test data.
+        
+        Args:
+            model: Trained Keras model
+            X_test: Test images array (optional, for array-based evaluation)
+            age_test: Test ages array (optional, for array-based evaluation)
+            history: Training history object (optional)
+            test_generator: Keras Sequence generator (optional, for generator-based evaluation)
+            gen_test: Gender labels (optional)
+            etn_test: Ethnicity labels (optional)
+            top_n: Number of worst predictions to save as images (default 10)
+            output_dir: Directory to save images (default: reports/evaluation_mistakes)
+        
+        Returns:
+            (accuracy_percent, correct_count, incorrect_count)
+        """
+        # Handle generator-based evaluation
+        if test_generator is not None:
+            print("Using generator-based evaluation (memory efficient)...")
+            predictions = self._predict(model, test_generator=test_generator)
+            # Get age labels from generator (one-hot encoded)
+            age_test = np.argmax(test_generator.labels, axis=1)
+            
+            # Collect images from generator for worst image saving
+            if top_n > 0:
+                print(f"Collecting images from generator for worst {top_n} predictions...")
+                # Collect all images from generator
+                X_test_list = []
+                for i in range(len(test_generator)):
+                    batch_images, _ = test_generator[i]
+                    X_test_list.append(batch_images)
+                X_test = np.concatenate(X_test_list, axis=0)
+                print(f"Collected {len(X_test)} images from generator")
+            else:
+                X_test = None
+                
+        # Handle array-based evaluation
+        elif X_test is not None and age_test is not None:
+            predictions = self._predict(model, X_test=X_test)
+            # Convert one-hot encoded labels if needed
+            if age_test.ndim > 1:
+                age_test = np.argmax(age_test, axis=1)
+        else:
+            raise ValueError("Either test_generator or both X_test and age_test must be provided")
+        
+        # Calculate predicted and actual classes
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
         actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
 
+        # Print all evaluation metrics
         accuracy, correct_predictions, incorrect = self._print_summary(actual_classes, predicted_classes, len(predictions))
         self._print_classification_report(actual_classes, predicted_classes)
         self._print_detailed_stats(predictions, age_test, actual_classes, predicted_classes)
         self._print_under18_over25_analysis(predictions, age_test, actual_classes)
         self._demographic_analysis(actual_classes, predicted_classes, gen_test, etn_test)
         self._plot_metrics(history, actual_classes, predicted_classes)
-        self._save_worst_images(X_test, predictions, age_test, top_n=top_n, output_dir=output_dir)
+        
+        # Save worst images if we have X_test array and top_n > 0
+        if X_test is not None and top_n > 0:
+            self._save_worst_images(X_test, predictions, age_test, top_n=top_n, output_dir=output_dir)
 
         return accuracy, correct_predictions, incorrect
 

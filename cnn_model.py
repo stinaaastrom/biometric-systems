@@ -279,7 +279,7 @@ class CNNModel:
         - Classification report
         - Confusion matrix
         - Demographic analysis
-        - Saves top-N worst predictions as images
+        - Saves top-N worst predictions as images (array-based only)
         
         Args:
             test_generator: Keras Sequence generator for test data (optional, uses self.test_generator)
@@ -287,56 +287,30 @@ class CNNModel:
             age_test: Test ages array (optional, uses self.age_test if not using generator)
             gen_test: Gender labels (optional)
             etn_test: Ethnicity labels (optional)
-            top_n: Number of worst predictions to save as images (default 10)
+            top_n: Number of worst predictions to save as images (default 10, only for array-based)
             output_dir: Directory to save images (default: reports/evaluation_mistakes)
         
         Returns:
             (accuracy_percent, correct_count, incorrect_count)
         """
-        # Use provided generator or fall back to instance variable
+        # Use provided data or fall back to instance variables
         if test_generator is None:
             test_generator = self.test_generator
+        if X_test is None:
+            X_test = self.X_test
+        if age_test is None:
+            age_test = self.age_test
         
-        # Use generator if available (preferred - memory efficient)
-        if test_generator is not None:
-            print("Using generator-based evaluation (memory efficient)...")
-            # Get predictions from generator
-            predictions = self.model.predict(test_generator)
-            # Generator labels are one-hot encoded
-            age_test = np.argmax(test_generator.labels, axis=1)
-            X_test = None  # Can't easily get images from generator for worst image saving
-            
-        else:
-            # Fall back to array-based data
-            if X_test is None:
-                X_test = self.X_test
-            if age_test is None:
-                age_test = self.age_test
-            
-            # Get test data
-            if X_test is not None and isinstance(X_test, np.ndarray):
-                pass  # X_test is ready
-            else:
-                raise ValueError("No test data available (test_generator or X_test required)")
-            
-            # Get age test labels (convert from one-hot if needed)
-            if age_test is not None:
-                if age_test.ndim > 1:
-                    # One-hot encoded - convert to class indices
-                    age_test = np.argmax(age_test, axis=1)
-            else:
-                raise ValueError("age_test not available for evaluation")
-            
-            # Make predictions on array
-            predictions = self.model.predict(X_test)
-        
-        # Use Evaluation class for comprehensive analysis
+        # Create evaluator instance
         evaluator = Evaluation(AGE_CLASSES, self.find_age_class)
+        
+        # Let evaluator handle all prediction and evaluation logic
         accuracy, correct, incorrect = evaluator.evaluate(
-            self.model,
-            X_test,
-            age_test,
+            model=self.model,
+            X_test=X_test,
+            age_test=age_test,
             history=self.history if hasattr(self, 'history') else None,
+            test_generator=test_generator,
             gen_test=gen_test,
             etn_test=etn_test,
             top_n=top_n,
