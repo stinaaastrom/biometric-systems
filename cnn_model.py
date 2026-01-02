@@ -123,58 +123,38 @@ class CNNModel:
         # Skapa checkpoint-mapp om den inte finns
         os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # TPU-detektering och initialisering
-        tpu_strategy = None
-        try:
-            print("🔍 Letar efter TPU...")
-            tpu = tf.distribute.cluster_resolver.TPUClusterResolver()
-            tf.tpu.experimental.initialize_tpu_system(tpu)
-            tpu_strategy = tf.distribute.TPUStrategy(tpu)
-            print(f"✓ TPU hittad! Antal replicas: {tpu_strategy.num_replicas_in_sync}")
-        except ValueError:
-            print("ℹ️  Ingen TPU hittad, använder GPU/CPU")
-            # Fallback till GPU/CPU strategy om TPU inte finns
-            if tf.config.list_physical_devices('GPU'):
-                tpu_strategy = tf.distribute.MirroredStrategy()
-                print(f"✓ Använder MirroredStrategy med {tpu_strategy.num_replicas_in_sync} GPU(s)")
-            else:
-                tpu_strategy = tf.distribute.get_strategy()  # Default strategy
-                print("✓ Använder standard strategy (CPU)")
-        
         # Kolla om det finns en tidigare checkpoint att ladda (stage 1)
         latest_checkpoint = self._get_latest_checkpoint(checkpoint_dir, stage='stage1')
 
-        # Bygg modellen inom strategy scope för TPU/distributed training
-        with tpu_strategy.scope():
-            inputs = Input(shape=(224, 224, 3))
-            x = Lambda(preprocess_input)(inputs)
-            base_model = EfficientNetB0(include_top=False, input_tensor=x, weights="imagenet")
-            x = base_model.output
-            x = GlobalAveragePooling2D()(x)
-            x = Dropout(0.3)(x)
-            x = Dense(128, activation="relu")(x)
-            x = BatchNormalization()(x)
-            x = Dropout(0.4)(x)
+        inputs = Input(shape=(224, 224, 3))
+        x = Lambda(preprocess_input)(inputs)
+        base_model = EfficientNetB0(include_top=False, input_tensor=x, weights="imagenet")
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+        x = Dropout(0.3)(x)
+        x = Dense(128, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
 
-            output = Dense(8, activation="softmax")(x)
-            model = Model(inputs=base_model.input, outputs=output)
+        output = Dense(8, activation="softmax")(x)
+        model = Model(inputs=base_model.input, outputs=output)
 
-            # Steg 1: Frys hela backbone
-            for layer in base_model.layers:
-                layer.trainable = False
-            
-            # Ladda checkpoint om den finns
-            initial_epoch_stage1 = 0
-            if latest_checkpoint and 'stage1' in latest_checkpoint:
-                print(f"\n✓ Laddar checkpoint: {latest_checkpoint}")
-                model.load_weights(latest_checkpoint)
-                # Extrahera epoch-nummer från filnamnet
-                epoch_str = latest_checkpoint.split('epoch')[-1].split('-')[0]
-                initial_epoch_stage1 = int(epoch_str)
-                print(f"  Fortsätter från epoch {initial_epoch_stage1}")
-            
-            # Kompilera EFTER checkpoint laddats för att säkerställa fryst status
-            model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
+        # Steg 1: Frys hela backbone
+        for layer in base_model.layers:
+            layer.trainable = False
+        
+        # Ladda checkpoint om den finns
+        initial_epoch_stage1 = 0
+        if latest_checkpoint and 'stage1' in latest_checkpoint:
+            print(f"\n✓ Laddar checkpoint: {latest_checkpoint}")
+            model.load_weights(latest_checkpoint)
+            # Extrahera epoch-nummer från filnamnet
+            epoch_str = latest_checkpoint.split('epoch')[-1].split('-')[0]
+            initial_epoch_stage1 = int(epoch_str)
+            print(f"  Fortsätter från epoch {initial_epoch_stage1}")
+        
+        # Kompilera EFTER checkpoint laddats för att säkerställa fryst status
+        model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
         
         model.summary()
 
@@ -206,25 +186,23 @@ class CNNModel:
             raise ValueError("Ingen träningsdata tillgänglig.")
 
         # Steg 2: Fine-tuning (tina sista 20-30% av backbone)
-        # Använd strategy scope även för stage 2
-        with tpu_strategy.scope():
-            n_layers = len(base_model.layers)
-            n_unfreeze = int(n_layers * fine_tune_percent)
-            for layer in base_model.layers[-n_unfreeze:]:
-                layer.trainable = True
-            
-            # Kolla om det finns checkpoint för stage 2
-            latest_checkpoint_stage2 = self._get_latest_checkpoint(checkpoint_dir, stage='stage2')
-            initial_epoch_stage2 = 0
-            if latest_checkpoint_stage2:
-                print(f"\n✓ Laddar Stage 2 checkpoint: {latest_checkpoint_stage2}")
-                model.load_weights(latest_checkpoint_stage2)
-                epoch_str = latest_checkpoint_stage2.split('epoch')[-1].split('-')[0]
-                initial_epoch_stage2 = int(epoch_str)
-                print(f"  Fortsätter från epoch {initial_epoch_stage2}")
-            
-            # Kompilera EFTER checkpoint laddats
-            model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
+        n_layers = len(base_model.layers)
+        n_unfreeze = int(n_layers * fine_tune_percent)
+        for layer in base_model.layers[-n_unfreeze:]:
+            layer.trainable = True
+        
+        # Kolla om det finns checkpoint för stage 2
+        latest_checkpoint_stage2 = self._get_latest_checkpoint(checkpoint_dir, stage='stage2')
+        initial_epoch_stage2 = 0
+        if latest_checkpoint_stage2:
+            print(f"\n✓ Laddar Stage 2 checkpoint: {latest_checkpoint_stage2}")
+            model.load_weights(latest_checkpoint_stage2)
+            epoch_str = latest_checkpoint_stage2.split('epoch')[-1].split('-')[0]
+            initial_epoch_stage2 = int(epoch_str)
+            print(f"  Fortsätter från epoch {initial_epoch_stage2}")
+        
+        # Kompilera EFTER checkpoint laddats
+        model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
         
         # Checkpoint callback för Stage 2
         checkpoint_stage2 = EveryNEpochCheckpoint(
