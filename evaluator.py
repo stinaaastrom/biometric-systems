@@ -115,12 +115,15 @@ class Evaluation:
                 class_predictions = predictions[true_mask]
                 class_actuals = age_test[true_mask]
                 mae = float(np.mean(np.abs(class_predictions - class_actuals)))
+                class_accuracy = (correct_count / true_count * 100.0) if true_count > 0 else 0.0
             else:
                 mae = 0.0
+                class_accuracy = 0.0
             print(f"\nAge Period: {class_label}")
             print(f"  True samples: {true_count}")
             print(f"  Predicted as this period: {pred_count}")
             print(f"  Correctly classified: {correct_count}")
+            print(f"  Accuracy: {class_accuracy:.2f}% ({correct_count}/{true_count})")
             print(f"  Mean Absolute Error: {mae:.2f} years")
         print("\n" + "="*50 + "\n")
 
