@@ -28,6 +28,7 @@ from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.utils import to_categorical
 
 from constants import AGE_CLASSES
+from evaluator import Evaluation
 
 # Default path for model files (absolute path)
 import os
@@ -267,118 +268,82 @@ class CNNModel:
             
 
 
-    def evaluate_model_performance(self, gen_test=None, etn_test=None):
+    def evaluate_model_performance(self, test_generator=None, X_test=None, age_test=None, gen_test=None, etn_test=None, top_n=10, output_dir=None):
         """
-        Evaluate model performance by comparing age class predictions.
-        Supports both array-based test data and Keras generators.
+        Evaluate model performance using the Evaluation class.
+        
+        Supports both generator-based and array-based test data.
+        
+        Provides:
+        - Overall accuracy and per-class accuracy
+        - Classification report
+        - Confusion matrix
+        - Demographic analysis
+        - Saves top-N worst predictions as images
+        
+        Args:
+            test_generator: Keras Sequence generator for test data (optional, uses self.test_generator)
+            X_test: Test images array (optional, uses self.X_test if not using generator)
+            age_test: Test ages array (optional, uses self.age_test if not using generator)
+            gen_test: Gender labels (optional)
+            etn_test: Ethnicity labels (optional)
+            top_n: Number of worst predictions to save as images (default 10)
+            output_dir: Directory to save images (default: reports/evaluation_mistakes)
+        
+        Returns:
+            (accuracy_percent, correct_count, incorrect_count)
         """
-
-        # 1. PREDICTIONS + TRUE LABELS
-        if self.X_test is not None and isinstance(self.X_test, np.ndarray) and self.X_test.ndim >= 3:
-            print("Making predictions on array-based test data...")
-            predictions = self.model.predict(self.X_test)
-            predicted_classes = np.argmax(predictions, axis=1)
-            actual_classes = np.argmax(self.age_test, axis=1)
-            valid_mask = actual_classes != None
-            predicted_classes = predicted_classes[valid_mask]
-            actual_classes = actual_classes[valid_mask].astype(int)
-        elif self.test_generator is not None:
-            print("Making predictions on generator-based test data...")
-            predictions = self.model.predict(self.test_generator)
-            # test_generator.labels är one-hot
-            actual_classes = np.argmax(self.test_generator.labels, axis=1)
-            predicted_classes = np.argmax(predictions, axis=1)
-            valid_mask = actual_classes != None
-            predicted_classes = predicted_classes[valid_mask]
-            actual_classes = actual_classes[valid_mask].astype(int)
+        # Use provided generator or fall back to instance variable
+        if test_generator is None:
+            test_generator = self.test_generator
+        
+        # Use generator if available (preferred - memory efficient)
+        if test_generator is not None:
+            print("Using generator-based evaluation (memory efficient)...")
+            # Get predictions from generator
+            predictions = self.model.predict(test_generator)
+            # Generator labels are one-hot encoded
+            age_test = np.argmax(test_generator.labels, axis=1)
+            X_test = None  # Can't easily get images from generator for worst image saving
+            
         else:
-            raise ValueError("No test data available (X_test or test_generator required).")
-
-        # Säkerhetskontroll
-        if len(predicted_classes) != len(actual_classes):
-            raise ValueError(
-                f"Length mismatch: predicted={len(predicted_classes)}, actual={len(actual_classes)}"
-            )
-
-        # --------------------------------------------------
-        # 2. DEMOGRAFISK FILTRERING (OM FINNS)
-        # --------------------------------------------------
-        if gen_test is not None:
-            gen_test = np.asarray(gen_test)[:len(actual_classes)]
-        if etn_test is not None:
-            etn_test = np.asarray(etn_test)[:len(actual_classes)]
-
-        # --------------------------------------------------
-        # 3. ACCURACY
-        # --------------------------------------------------
-        correct_predictions = np.sum(predicted_classes == actual_classes)
-        total_predictions = len(actual_classes)
-        accuracy = (correct_predictions / total_predictions) * 100
-
-        # --------------------------------------------------
-        # 4. UTSKRIFT
-        # --------------------------------------------------
-        print("\n" + "=" * 55)
-        print("MODEL EVALUATION RESULTS – AGE CLASS ACCURACY")
-        print("=" * 55)
-        print(f"Total predictions: {total_predictions}")
-        print(f"Correct predictions: {correct_predictions}")
-        print(f"Incorrect predictions: {total_predictions - correct_predictions}")
-        print(f"Accuracy: {accuracy:.2f}%\n")
-
-        print("Age Classes:")
-        for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
-            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
-            print(f"  Class {idx}: {label}")
-
-        # --------------------------------------------------
-        # 5. PER-KLASS ACCURACY
-        # --------------------------------------------------
-        print("\nPer-class accuracy:")
-        for class_idx in range(len(AGE_CLASSES)):
-            mask = actual_classes == class_idx
-            if np.any(mask):
-                class_correct = np.sum(predicted_classes[mask] == class_idx)
-                class_total = np.sum(mask)
-                class_acc = (class_correct / class_total) * 100
-
-                min_age, max_age = AGE_CLASSES[class_idx]
-                label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
-                print(
-                    f"  Class {class_idx} ({label}): "
-                    f"{class_acc:.2f}% ({class_correct}/{class_total})"
-                )
-
-        print("=" * 55 + "\n")
-
-        # --------------------------------------------------
-        # 6. TRÄNINGSHISTORIK
-        # --------------------------------------------------
-        if hasattr(self, "history") and self.history is not None:
-            plt.figure(figsize=(12, 5))
-
-            plt.subplot(1, 2, 1)
-            plt.plot(self.history.history["accuracy"], label="Train Accuracy")
-            plt.plot(self.history.history["val_accuracy"], label="Val Accuracy")
-            plt.title("Model Accuracy")
-            plt.xlabel("Epoch")
-            plt.ylabel("Accuracy")
-            plt.legend()
-            plt.grid(True)
-
-            plt.subplot(1, 2, 2)
-            plt.plot(self.history.history["loss"], label="Train Loss")
-            plt.plot(self.history.history["val_loss"], label="Val Loss")
-            plt.title("Model Loss")
-            plt.xlabel("Epoch")
-            plt.ylabel("Loss")
-            plt.legend()
-            plt.grid(True)
-
-            plt.tight_layout()
-            plt.show()
-
-        return accuracy, correct_predictions, total_predictions - correct_predictions
+            # Fall back to array-based data
+            if X_test is None:
+                X_test = self.X_test
+            if age_test is None:
+                age_test = self.age_test
+            
+            # Get test data
+            if X_test is not None and isinstance(X_test, np.ndarray):
+                pass  # X_test is ready
+            else:
+                raise ValueError("No test data available (test_generator or X_test required)")
+            
+            # Get age test labels (convert from one-hot if needed)
+            if age_test is not None:
+                if age_test.ndim > 1:
+                    # One-hot encoded - convert to class indices
+                    age_test = np.argmax(age_test, axis=1)
+            else:
+                raise ValueError("age_test not available for evaluation")
+            
+            # Make predictions on array
+            predictions = self.model.predict(X_test)
+        
+        # Use Evaluation class for comprehensive analysis
+        evaluator = Evaluation(AGE_CLASSES, self.find_age_class)
+        accuracy, correct, incorrect = evaluator.evaluate(
+            self.model,
+            X_test,
+            age_test,
+            history=self.history if hasattr(self, 'history') else None,
+            gen_test=gen_test,
+            etn_test=etn_test,
+            top_n=top_n,
+            output_dir=output_dir
+        )
+        
+        return accuracy, correct, incorrect
 
     
     def save_model(self, filepath=None):
@@ -416,8 +381,24 @@ class CNNModel:
         if filepath is None:
             filepath = DEFAULT_MODEL_PATH
         
-        self.model = load_model(filepath)
-        print(f"Model loaded from {filepath}")
+        # Custom objects for Lambda layer with preprocess_input
+        custom_objects = {
+            'preprocess_input': preprocess_input
+        }
+        
+        try:
+            self.model = load_model(filepath, custom_objects=custom_objects)
+            print(f"✓ Model loaded from {filepath}")
+        except Exception as e:
+            print(f"✗ Error loading model: {e}")
+            print("  Trying alternative loading method...")
+            try:
+                # Fallback: try loading without custom objects
+                self.model = load_model(filepath)
+                print(f"✓ Model loaded (without custom objects)")
+            except Exception as e2:
+                print(f"✗ Failed to load model: {e2}")
+                return None
         
         # Also load test data if it exists
         test_data_path = filepath.replace('.keras', '_testdata.npz')
@@ -426,10 +407,10 @@ class CNNModel:
                 test_data = np.load(test_data_path, allow_pickle=True)
                 self.X_test = test_data['X_test']
                 self.age_test = test_data['age_test']
-                print(f"Test data loaded from {test_data_path} ({len(self.age_test)} samples)")
+                print(f"✓ Test data loaded from {test_data_path} ({len(self.age_test)} samples)")
             except Exception as e:
-                print(f"Warning: Could not load test data: {e}")
+                print(f"⚠️  Warning: Could not load test data: {e}")
         else:
-            print(f"Warning: Test data file not found at {test_data_path}")
+            print(f"ℹ️  Test data file not found at {test_data_path}")
         
         return self.model
