@@ -238,9 +238,9 @@ class CNNModel:
             ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
         ]
 
-        print(f"\n--- Steg 2: Finitial_epoch_stage2 + epochs_stage2
-        print(f"Kör från epoch {initial_epoch_stage2} till {target_epochs_stage2}"00:.0f}% av backbone) ---")
-        target_epochs_stage2 = max(epochs_stage2, initial_epoch_stage2 + 1)
+        print(f"\n--- Steg 2: Fine-tuning (tina sista {fine_tune_percent*100:.0f}% av backbone) ---")
+        target_epochs_stage2 = initial_epoch_stage2 + epochs_stage2
+        print(f"Kör från epoch {initial_epoch_stage2} till {target_epochs_stage2}")
         self.history_finetune = model.fit(
             self.train_generator,
             validation_data=self.test_generator,
