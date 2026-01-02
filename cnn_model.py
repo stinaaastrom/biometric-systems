@@ -35,27 +35,6 @@ import os
 DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models', 'age_model.keras')
 
 
-class EveryNEpochCheckpoint(Callback):
-    """Saves model weights every Nth epoch using a formatted filepath."""
-
-    def __init__(self, filepath, every_n_epochs=1):
-        super().__init__()
-        self.filepath = filepath
-        self.every_n_epochs = max(1, every_n_epochs)
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        # epoch is zero-based; add 1 for human-friendly numbering
-        if (epoch + 1) % self.every_n_epochs != 0:
-            return
-
-        filepath = self.filepath.format(
-            epoch=epoch + 1,
-            val_loss=logs.get("val_loss", 0.0)
-        )
-        self.model.save_weights(filepath)
-        print(f"\n✓ Saved checkpoint: {filepath}")
-
 class CNNModel:
     
     def __init__(self, train_generator=None, test_generator=None, X_test=None, age_test=None, 
@@ -89,17 +68,17 @@ class CNNModel:
         """
         Returns the index of the class an age belongs to,
         or None if age is outside all defined ranges.
-        Handles both scalar ålder och one-hot-vektor (t.ex. [0 0 0 0 0 1 0 0]).
+        Handles both scalar age and one-hot vector (e.g. [0 0 0 0 0 1 0 0]).
         """
         if isinstance(predicted_age, np.ndarray):
-            # Om det är en one-hot-vektor (längd 8)
+            # If it's a one-hot vector (length 8)
             if predicted_age.ndim == 1 and predicted_age.shape[0] == len(AGE_CLASSES):
                 return int(np.argmax(predicted_age))
-            # Om det är en array med ett element
+            # If it's an array with a single element
             if predicted_age.size == 1:
                 predicted_age = float(predicted_age)
             else:
-                raise ValueError(f"find_age_class: predicted_age måste vara en scalar eller one-hot-vektor, fick shape {predicted_age.shape}")
+                raise ValueError(f"find_age_class: predicted_age must be a scalar or one-hot vector, got shape {predicted_age.shape}")
 
         for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
             if max_age is None:
@@ -112,20 +91,14 @@ class CNNModel:
 
 
 
-    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3, checkpoint_dir='models/checkpoints'):
+    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3):
         """
-        Bygger och tränar EfficientNet-modellen i två steg:
-        1. Feature extractor (frys backbone, träna topplager)
-        2. Fine-tuning (tina sista 20-30% av backbone)
+        Build and train EfficientNet model in two stages:
+        1. Feature extractor (freeze backbone, train top layers)
+        2. Fine-tuning (unfreeze last 20-30% of backbone)
         
-        Stödjer automatisk TPU-detektering och distributed training.
+        Supports automatic TPU detection and distributed training.
         """
-    
-        # Skapa checkpoint-mapp om den inte finns
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Kolla om det finns en tidigare checkpoint att ladda (stage 1)
-        latest_checkpoint = self._get_latest_checkpoint(checkpoint_dir, stage='stage1')
 
         inputs = Input(shape=(224, 224, 3))
         x = Lambda(preprocess_input)(inputs)
@@ -140,166 +113,77 @@ class CNNModel:
         output = Dense(8, activation="softmax")(x)
         model = Model(inputs=base_model.input, outputs=output)
 
-        # Steg 1: Frys hela backbone
+        # Stage 1: Freeze entire backbone
         for layer in base_model.layers:
             layer.trainable = False
         
-        # Ladda checkpoint om den finns
-        initial_epoch_stage1 = 0
-        if latest_checkpoint and 'stage1' in latest_checkpoint:
-            print(f"\n✓ Laddar checkpoint: {latest_checkpoint}")
-            model.load_weights(latest_checkpoint)
-            # Extrahera epoch-nummer från filnamnet
-            epoch_str = latest_checkpoint.split('epoch')[-1].split('-')[0]
-            initial_epoch_stage1 = int(epoch_str)
-            print(f"  Fortsätter från epoch {initial_epoch_stage1}")
-        
-        # Kompilera EFTER checkpoint laddats för att säkerställa fryst status
+        # Compile the model
         model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
         
         model.summary()
 
-        # Checkpoint callback för Stage 1 - sparar var 10:e epoch
-        checkpoint_stage1 = EveryNEpochCheckpoint(
-            filepath=os.path.join(checkpoint_dir, 'stage1_epoch{epoch:02d}-val_loss{val_loss:.4f}.weights.h5'),
-            every_n_epochs=10
-        )
-        
         callbacks = [
-            checkpoint_stage1,
             EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
             ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
         ]
 
         if self.train_generator is not None and self.test_generator is not None:
-            print("\n--- Steg 1: Feature extractor (frys backbone, träna topplager) ---")
-            # Beräkna total epochs: om vi laddat epoch 10, kör till epoch 10+10=20
-            target_epochs_stage1 = initial_epoch_stage1 + epochs_stage1
-            print(f"Kör från epoch {initial_epoch_stage1} till {target_epochs_stage1}")
+            print("\n--- Stage 1: Feature extractor (freeze backbone, train top layers) ---")
             self.history = model.fit(
                 self.train_generator,
                 validation_data=self.test_generator,
-                epochs=target_epochs_stage1,
-                initial_epoch=initial_epoch_stage1,
+                epochs=epochs_stage1,
                 callbacks=callbacks
             )
         else:
-            raise ValueError("Ingen träningsdata tillgänglig.")
+            raise ValueError("No training data available.")
 
-        # Steg 2: Fine-tuning (tina sista 20-30% av backbone)
+        # Stage 2: Fine-tuning (unfreeze last 20-30% of backbone)
         n_layers = len(base_model.layers)
         n_unfreeze = int(n_layers * fine_tune_percent)
         for layer in base_model.layers[-n_unfreeze:]:
             layer.trainable = True
         
-        # Kolla om det finns checkpoint för stage 2
-        latest_checkpoint_stage2 = self._get_latest_checkpoint(checkpoint_dir, stage='stage2')
-        initial_epoch_stage2 = 0
-        if latest_checkpoint_stage2:
-            print(f"\n✓ Laddar Stage 2 checkpoint: {latest_checkpoint_stage2}")
-            model.load_weights(latest_checkpoint_stage2)
-            epoch_str = latest_checkpoint_stage2.split('epoch')[-1].split('-')[0]
-            initial_epoch_stage2 = int(epoch_str)
-            print(f"  Fortsätter från epoch {initial_epoch_stage2}")
-        
-        # Kompilera EFTER checkpoint laddats
+        # Compile the model
         model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
         
-        # Checkpoint callback för Stage 2
-        checkpoint_stage2 = EveryNEpochCheckpoint(
-            filepath=os.path.join(checkpoint_dir, 'stage2_epoch{epoch:02d}-val_loss{val_loss:.4f}.weights.h5'),
-            every_n_epochs=10
-        )
-        
         callbacks_stage2 = [
-            checkpoint_stage2,
             EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
             ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
         ]
 
-        print(f"\n--- Steg 2: Fine-tuning (tina sista {fine_tune_percent*100:.0f}% av backbone) ---")
-        target_epochs_stage2 = initial_epoch_stage2 + epochs_stage2
-        print(f"Kör från epoch {initial_epoch_stage2} till {target_epochs_stage2}")
+        print(f"\n--- Stage 2: Fine-tuning (unfreeze last {fine_tune_percent*100:.0f}% of backbone) ---")
         self.history_finetune = model.fit(
             self.train_generator,
             validation_data=self.test_generator,
-            epochs=target_epochs_stage2,
-            initial_epoch=initial_epoch_stage2,
+            epochs=epochs_stage2,
             callbacks=callbacks_stage2
         )
 
         self.model = model
 
 
-
-    def _get_latest_checkpoint(self, checkpoint_dir, stage=None):
-        """Hitta senaste checkpoint-fil i checkpoint-mappen."""
-        if not os.path.exists(checkpoint_dir):
-            return None
-
-        checkpoint_exts = ('.weights.h5', '.ckpt')
-        checkpoints = []
-        for f in os.listdir(checkpoint_dir):
-            if not f.endswith(checkpoint_exts):
-                continue
-            if stage and stage not in f:
-                continue
-            checkpoints.append(os.path.join(checkpoint_dir, f))
-
-        if not checkpoints:
-            return None
-
-        checkpoints.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-        return checkpoints[0]
-
-    from keras.saving import register_keras_serializable
-
-    @staticmethod
-    @register_keras_serializable()
-    def age_mae(y_true, y_pred):
-        class_centers = tf.constant([1, 4, 8, 13, 18, 30, 50, 70], dtype=tf.float32)
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(y_pred, tf.float32)
-        y_true_age = tf.reduce_sum(y_true * class_centers, axis=1)
-        y_pred_age = tf.reduce_sum(y_pred * class_centers, axis=1)
-        return tf.reduce_mean(tf.abs(y_true_age - y_pred_age))
-
-
-            
-
-
-    def evaluate_model_performance(self, test_generator=None, X_test=None, age_test=None, gen_test=None, etn_test=None, top_n=10, output_dir=None):
+    def evaluate_model_performance(self, test_generator=None, gen_test=None, etn_test=None):
         """
         Evaluate model performance using the Evaluation class.
         
-        Supports both generator-based and array-based test data.
+        Uses generator-based evaluation for memory efficiency.
         
         Provides:
         - Overall accuracy and per-class accuracy
         - Classification report
         - Confusion matrix
         - Demographic analysis
-        - Saves top-N worst predictions as images (array-based only)
-        
-        Args:
-            test_generator: Keras Sequence generator for test data (optional, uses self.test_generator)
-            X_test: Test images array (optional, uses self.X_test if not using generator)
-            age_test: Test ages array (optional, uses self.age_test if not using generator)
-            gen_test: Gender labels (optional)
-            etn_test: Ethnicity labels (optional)
-            top_n: Number of worst predictions to save as images (default 10, only for array-based)
-            output_dir: Directory to save images (default: reports/evaluation_mistakes)
         
         Returns:
             (accuracy_percent, correct_count, incorrect_count)
         """
-        # Use provided data or fall back to instance variables
+        # Use provided generator or fall back to instance variable
         if test_generator is None:
             test_generator = self.test_generator
-        if X_test is None:
-            X_test = self.X_test
-        if age_test is None:
-            age_test = self.age_test
+        
+        if test_generator is None:
+            raise ValueError("No test_generator available for evaluation")
         
         # Create evaluator instance
         evaluator = Evaluation(AGE_CLASSES, self.find_age_class)
@@ -307,14 +191,10 @@ class CNNModel:
         # Let evaluator handle all prediction and evaluation logic
         accuracy, correct, incorrect = evaluator.evaluate(
             model=self.model,
-            X_test=X_test,
-            age_test=age_test,
-            history=self.history if hasattr(self, 'history') else None,
             test_generator=test_generator,
+            history=self.history if hasattr(self, 'history') else None,
             gen_test=gen_test,
-            etn_test=etn_test,
-            top_n=top_n,
-            output_dir=output_dir
+            etn_test=etn_test
         )
         
         return accuracy, correct, incorrect

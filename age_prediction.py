@@ -9,7 +9,7 @@ evaluation, and prediction workflows.
 import os
 import cv2
 import numpy as np
-from cnn_model import CNNModel
+from cnn_model import CNNModel, AGE_CLASSES
 from dataset_downloader import DatasetDownloader
 from dataset_processor import DatasetProcessor
 from image_processing import ImageProcesser
@@ -39,17 +39,17 @@ class AgePrediction:
         downloader = DatasetDownloader()  # download + folder management
         processor = DatasetProcessor(downloader.dataset_utkface, downloader.dataset_facial_age)
 
-        # 1. Preprocess and save all images (utan augmentation)
+        # 1. Preprocess and save all images (without augmentation)
         processor.preprocess_and_save(output_dir='data/preprocessed_faces')
 
-        # 2. Bygg generatorer (augmentation sker i generatorn)
-        train_gen, test_gen, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset(batch_size=32, use_generator=True)
+        # 2. Build generators (augmentation happens in the generator)
+        train_gen, test_gen, train_paths, train_ages, train_genders, train_etnicity, test_paths, test_ages, test_genders, test_etnicity = processor.generate_dataset(batch_size=32)
 
         # Visualize initial dataset distribution
         visualizer = DatasetVisualizer(train_ages, train_genders, train_etnicity)
         visualizer.show_initial_visuals()
 
-        # Skapa och träna modellen med generatorer
+        # Create and train the model with generators
         self.cnn_model = CNNModel(
             train_generator=train_gen,
             test_generator=test_gen,
@@ -93,7 +93,6 @@ class AgePrediction:
         confidence = predictions[predicted_class] * 100
         
         # Convert class to age range
-        from cnn_model import AGE_CLASSES
         min_age, max_age = AGE_CLASSES[predicted_class]
         if max_age is None:
             age_range = f"{min_age}+"
@@ -144,7 +143,6 @@ class AgePrediction:
     
     def load_model(self, filepath=None):
         """Load a previously trained model from disk."""
-        import numpy as np
         
         # Determine which path to use
         if not filepath:

@@ -2,10 +2,16 @@ import os
 import hashlib
 import cv2
 import numpy as np
+import json
+import random
+import shutil
+from collections import defaultdict
 from sklearn.model_selection import train_test_split
+from keras.utils import to_categorical
 
 from image_processing import ImageProcesser
 from constants import AGE_CLASSES, IMAGE_SIZE
+from data_generator import ImageDiskGenerator
 
 
 # Define data folder paths (defaults)
@@ -21,9 +27,8 @@ class DatasetProcessor:
 
     def preprocess_and_save(self, output_dir='data/preprocessed_faces'):
         """
-        Förbehandla (enhancements, normalisering, resize) och spara alla bilder till output_dir.
+        Preprocess (enhancements, normalization, resize) and save all images to output_dir.
         """
-        import shutil
         os.makedirs(output_dir, exist_ok=True)
         self.ensure_preprocessed_faces()
         self.create_image_age_list(use_processed=True)
@@ -40,8 +45,7 @@ class DatasetProcessor:
                     img = (img * 255).astype(np.uint8)
                     cv2.imwrite(dest_path, img)
             meta.append({'filename': fname, 'age': float(age), 'gender': str(gender), 'etnicity': str(etnicity)})
-        # Spara metadata
-        import json
+        # Save metadata
         with open(os.path.join(output_dir, 'metadata.json'), 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)
         print(f"✓ Preprocessed {len(meta)} images to {output_dir}")
@@ -198,7 +202,6 @@ class DatasetProcessor:
                 if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
                     utkface_files.append((root, img_name))
 
-        import random
         random.shuffle(utkface_files)
 
         for root, img_name in utkface_files:
@@ -237,8 +240,7 @@ class DatasetProcessor:
             except ValueError:
                 continue
 
-        import random as _r
-        _r.shuffle(facial_age_files)
+        random.shuffle(facial_age_files)
 
         for root, img_name, age in facial_age_files:
             try:
@@ -263,7 +265,6 @@ class DatasetProcessor:
         self.etnicity = np.array(self.etnicity)
 
     def _balance_indices(self, indices):
-        from collections import defaultdict
         age_buckets = defaultdict(list)
         for idx in indices:
             age = self.ages[idx]
@@ -284,7 +285,6 @@ class DatasetProcessor:
         min_count = min(class_counts) if class_counts else 0
         balanced_indices = []
         print(f"\nBalancing to {min_count} images per class...")
-        import random
         for class_idx in range(len(AGE_CLASSES)):
             bucket_indices = age_buckets[class_idx]
             if len(bucket_indices) > min_count:
@@ -307,106 +307,29 @@ class DatasetProcessor:
                 return idx
         return None
 
-    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=True, overwrite_preprocess=False, use_balanced=True, use_generator=True):
+    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=True, overwrite_preprocess=False):
         """
-        Prepare train/test generators using pre-cropped faces on disk.
+        Prepare balanced train/test generators using pre-cropped faces on disk.
         """
-        import os
-        import glob
-        import json
-        balanced_dir = os.path.join('data', 'balanced_faces')
-        balanced_metadata_path = os.path.join(balanced_dir, 'metadata.json')
-        use_balanced_data = use_balanced and os.path.isdir(balanced_dir) and len(glob.glob(os.path.join(balanced_dir, '*.jpg'))) > 0 and os.path.exists(balanced_metadata_path)
-
-        if use_balanced_data:
-            print(f"\nLaddar balanserade träningsbilder direkt från {balanced_dir} ...")
-            # Läs metadata
-            with open(balanced_metadata_path, 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-            train_paths = np.array([os.path.join(balanced_dir, fname) for fname in meta['filenames']])
-            train_ages = np.array(meta['ages'], dtype=np.float32)
-            train_genders = np.array(meta['genders'])
-            train_etnicity = np.array(meta['etnicity'])
-            # Ladda testdata som vanligt
-            self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
-            self.create_image_age_list(use_processed=True)
-            age_classes = np.array([self._age_to_class(age) for age in self.ages])
-            indices = np.arange(len(self.image_paths))
-            _, test_idx = train_test_split(
-                indices,
-                test_size=test_size,
-                random_state=42,
-                stratify=age_classes
-            )
-            test_paths = self.image_paths[test_idx]
-            test_ages = self.ages[test_idx]
-            test_genders = self.genders[test_idx]
-            test_etnicity = self.etnicity[test_idx]
-        else:
-            self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
-            self.create_image_age_list(use_processed=True)
-            age_classes = np.array([self._age_to_class(age) for age in self.ages])
-            indices = np.arange(len(self.image_paths))
-            train_idx, test_idx = train_test_split(
-                indices,
-                test_size=test_size,
-                random_state=42,
-                stratify=age_classes
-            )
-            if balance_train:
-                train_idx = self._balance_indices(train_idx)
-                # Spara balanserade träningsbilder till data/balanced_faces/ och metadata
-                import shutil
-                os.makedirs(balanced_dir, exist_ok=True)
-                print(f"\nSparar balanserade träningsbilder till {balanced_dir} ...")
-                filenames = []
-                ages = []
-                genders = []
-                etnicity = []
-                for idx in train_idx:
-                    img_path = self.image_paths[idx]
-                    fname = os.path.basename(img_path)
-                    dest_path = os.path.join(balanced_dir, fname)
-                    if not os.path.exists(dest_path):
-                        try:
-                            shutil.copy2(img_path, dest_path)
-                        except Exception as e:
-                            print(f"Kunde inte kopiera {img_path} -> {dest_path}: {e}")
-                    filenames.append(fname)
-                    ages.append(float(self.ages[idx]))
-                    genders.append(str(self.genders[idx]))
-                    etnicity.append(str(self.etnicity[idx]))
-                # Spara metadata
-                with open(balanced_metadata_path, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        'filenames': filenames,
-                        'ages': ages,
-                        'genders': genders,
-                        'etnicity': etnicity
-                    }, f, indent=2, ensure_ascii=False)
-                print(f"✓ Metadata sparad till {balanced_metadata_path}")
-            train_paths = self.image_paths[train_idx]
-            train_ages = self.ages[train_idx]
-            train_genders = self.genders[train_idx]
-            train_etnicity = self.etnicity[train_idx]
-            test_paths = self.image_paths[test_idx]
-            test_ages = self.ages[test_idx]
-            test_genders = self.genders[test_idx]
-            test_etnicity = self.etnicity[test_idx]
-
-        # Läs preprocessed metadata
-        import json
+        # Ensure preprocessing is done
+        self.ensure_preprocessed_faces(overwrite=overwrite_preprocess)
+        
+        # Read preprocessed metadata
         pre_dir = os.path.join('data', 'preprocessed_faces')
-        with open(os.path.join(pre_dir, 'metadata.json'), 'r', encoding='utf-8') as f:
+        metadata_path = os.path.join(pre_dir, 'metadata.json')
+        
+        with open(metadata_path, 'r', encoding='utf-8') as f:
             meta = json.load(f)
+        
         all_paths = np.array([os.path.join(pre_dir, m['filename']) for m in meta])
         all_ages = np.array([m['age'] for m in meta], dtype=np.float32)
         all_genders = np.array([m['gender'] for m in meta])
         all_etnicity = np.array([m['etnicity'] for m in meta])
-        # One-hot labels
-        from keras.utils import to_categorical
+        
+        # Convert ages to class indices
         age_classes = np.array([self._age_to_class(age) for age in all_ages])
-        labels = to_categorical(age_classes, num_classes=8)
+        
+        # Split into train/test with stratification
         indices = np.arange(len(all_paths))
         train_idx, test_idx = train_test_split(
             indices,
@@ -414,20 +337,34 @@ class DatasetProcessor:
             random_state=42,
             stratify=age_classes
         )
+        
+        # Balance training data if requested
+        if balance_train:
+            print("\nBalancing training data...")
+            # Store metadata temporarily for balancing
+            self.ages = all_ages
+            train_idx = self._balance_indices(train_idx)
+        
+        # One-hot encode labels
+        labels = to_categorical(age_classes, num_classes=8)
+        
+        # Extract train/test data
         train_paths = all_paths[train_idx]
         train_labels = labels[train_idx]
-        test_paths = all_paths[test_idx]
-        test_labels = labels[test_idx]
         train_ages = all_ages[train_idx]
         train_genders = all_genders[train_idx]
         train_etnicity = all_etnicity[train_idx]
+        
+        test_paths = all_paths[test_idx]
+        test_labels = labels[test_idx]
         test_ages = all_ages[test_idx]
         test_genders = all_genders[test_idx]
         test_etnicity = all_etnicity[test_idx]
-
-        from data_generator import ImageDiskGenerator
+        
+        # Create generators
         train_gen = ImageDiskGenerator(train_paths, train_labels, batch_size=batch_size, augment=True, shuffle=True)
         test_gen = ImageDiskGenerator(test_paths, test_labels, batch_size=batch_size, augment=False, shuffle=False)
+        
         return (
             train_gen,
             test_gen,
@@ -440,4 +377,3 @@ class DatasetProcessor:
             test_genders,
             test_etnicity,
         )
-        

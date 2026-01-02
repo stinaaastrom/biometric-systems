@@ -21,29 +21,18 @@ class Evaluation:
         self.age_classes = age_classes
         self.find_age_class_fn = find_age_class_fn
 
-    def _predict(self, model, X_test=None, test_generator=None):
-        """Get predictions from model using either generator or array."""
-        if test_generator is not None:
-            # Generator-based prediction
-            print("Running predictions from generator...")
-            predictions = model.predict(test_generator)
-        elif X_test is not None:
-            # Array-based prediction
-            predictions = model.predict(X_test)
-        else:
-            raise ValueError("Either X_test or test_generator must be provided")
+    def _predict(self, model, test_generator):
+        """Get predictions from model using generator."""
+        print("Running predictions from generator...")
+        predictions = model.predict(test_generator)
         
         # Convert class probabilities to age values
         # predictions shape: (N, 8) for 8 age classes
         # Take argmax to get predicted class, then convert to age (using class midpoint)
-        if predictions.ndim > 1 and predictions.shape[1] > 1:
-            predicted_classes = np.argmax(predictions, axis=1)
-            # Convert class index to age (use midpoint of age range)
-            predicted_ages = np.array([self._class_to_age(cls) for cls in predicted_classes])
-            return predicted_ages
-        else:
-            # Single output (regression model) - just flatten
-            return predictions.flatten()
+        predicted_classes = np.argmax(predictions, axis=1)
+        # Convert class index to age (use midpoint of age range)
+        predicted_ages = np.array([self._class_to_age(cls) for cls in predicted_classes])
+        return predicted_ages
     
     def _class_to_age(self, class_idx):
         """Convert age class index to representative age value (midpoint of range)."""
@@ -229,102 +218,30 @@ class Evaluation:
         plt.tight_layout()
         plt.show()
 
-    def _save_worst_images(self, X_test, predictions, age_test, *, top_n=10, output_dir=None):
-        total_predictions = len(predictions)
-        if total_predictions == 0:
-            return 0, None
-        if output_dir is None:
-            root = os.path.dirname(os.path.dirname(__file__))
-            output_dir = os.path.join(root, 'reports', 'evaluation_mistakes')
-        os.makedirs(output_dir, exist_ok=True)
-
-        abs_errors = np.abs(predictions - age_test)
-        sorted_idx = np.argsort(-abs_errors)
-        n = int(min(top_n, len(sorted_idx)))
-        selected = sorted_idx[:n]
-
-        for rank, idx in enumerate(selected, start=1):
-            img = X_test[idx]
-            if img.dtype != np.uint8:
-                if img.max() <= 1.0:
-                    img_to_save = (img * 255.0).clip(0, 255).astype(np.uint8)
-                else:
-                    img_to_save = img.clip(0, 255).astype(np.uint8)
-            else:
-                img_to_save = img
-
-            scale_factor = 4
-            h, w = img_to_save.shape[:2]
-            img_large = cv2.resize(img_to_save, (w * scale_factor, h * scale_factor), interpolation=cv2.INTER_LANCZOS4)
-
-            pred_age = float(predictions[idx])
-            true_age = float(age_test[idx])
-            err = float(abs_errors[idx])
-
-            overlay = img_large.copy()
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.7
-            thickness = 2
-            line_height = 28
-            texts = [
-                (f"Pred: {pred_age:.1f}", (0, 0, 255)),
-                (f"True: {true_age:.1f}", (0, 255, 0)),
-                (f"Err: {err:.1f}", (255, 128, 0))
-            ]
-            y_offset = 10
-            for i, (text, color) in enumerate(texts):
-                y = y_offset + i * line_height
-                (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-                cv2.rectangle(overlay, (5, y - text_h - 3), (5 + text_w + 6, y + baseline + 3), (0, 0, 0), -1)
-                cv2.putText(overlay, text, (8, y), font, font_scale, color, thickness, cv2.LINE_AA)
-
-            filename = f"rank_{rank:02d}_idx_{idx}_pred_{pred_age:.1f}_true_{true_age:.1f}_err_{err:.1f}.png"
-            cv2.imwrite(os.path.join(output_dir, filename), overlay)
-
-        print(f"Saved {n} worst predictions to: {output_dir}")
-        return n, output_dir
-
-    def evaluate(self, model, X_test=None, age_test=None, history=None, test_generator=None, gen_test=None, etn_test=None, *, top_n=10, output_dir=None):
+    def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None):
         """
-        Evaluate model performance using either generator or array-based test data.
+        Evaluate model performance using test generator.
         
         Args:
             model: Trained Keras model
-            X_test: Test images array (optional, for array-based evaluation)
-            age_test: Test ages array (optional, for array-based evaluation)
+            test_generator: Keras Sequence generator for test data
             history: Training history object (optional)
-            test_generator: Keras Sequence generator (optional, for generator-based evaluation)
             gen_test: Gender labels (optional)
             etn_test: Ethnicity labels (optional)
-            top_n: Number of worst predictions to save as images (default 10)
-            output_dir: Directory to save images (default: reports/evaluation_mistakes)
         
         Returns:
             (accuracy_percent, correct_count, incorrect_count)
         """
-        # Handle generator-based evaluation
-        if test_generator is not None:
-            print("Using generator-based evaluation (memory efficient)...")
-            predictions = self._predict(model, test_generator=test_generator)
-            # Get age class indices from generator (one-hot encoded -> class indices)
-            actual_classes = np.argmax(test_generator.labels, axis=1)
-            # Convert class indices to ages for MAE calculation
-            age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
-            # Skip worst image saving (too memory intensive to collect all images)
-            X_test = None
-                
-        # Handle array-based evaluation
-        elif X_test is not None and age_test is not None:
-            predictions = self._predict(model, X_test=X_test)
-            # Convert one-hot encoded labels if needed
-            if age_test.ndim > 1:
-                actual_classes = np.argmax(age_test, axis=1)
-                age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
-            else:
-                # age_test is actual ages - convert to classes
-                actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
-        else:
-            raise ValueError("Either test_generator or both X_test and age_test must be provided")
+        print("Using generator-based evaluation (memory efficient)...")
+        
+        # Get predictions from generator
+        predictions = self._predict(model, test_generator)
+        
+        # Get age class indices from generator (one-hot encoded -> class indices)
+        actual_classes = np.argmax(test_generator.labels, axis=1)
+        
+        # Convert class indices to ages for MAE calculation
+        age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
         
         # Calculate predicted classes from predicted ages
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
@@ -336,14 +253,12 @@ class Evaluation:
         self._print_under18_over25_analysis(predictions, age_test, actual_classes)
         self._demographic_analysis(actual_classes, predicted_classes, gen_test, etn_test)
         self._plot_metrics(history, actual_classes, predicted_classes)
-        
-        # Note: Worst image saving disabled - too memory intensive with large test sets
-        # If needed, can be enabled for array-based evaluation only
 
         return accuracy, correct_predictions, incorrect
 
 
 # Backward-compatible functional API
-def evaluate_model_performance(model, X_test, age_test, history, AGE_CLASSES, find_age_class_fn, gen_test=None, etn_test=None, *, top_n=10, output_dir=None):
+def evaluate_model_performance(model, test_generator, history, AGE_CLASSES, find_age_class_fn, gen_test=None, etn_test=None):
     ev = Evaluation(AGE_CLASSES, find_age_class_fn)
-    return ev.evaluate(model, X_test, age_test, history, gen_test=gen_test, etn_test=etn_test, top_n=top_n, output_dir=output_dir)
+    return ev.evaluate(model, test_generator, history, gen_test=gen_test, etn_test=etn_test)
+
