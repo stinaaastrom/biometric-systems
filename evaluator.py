@@ -27,12 +27,33 @@ class Evaluation:
             # Generator-based prediction
             print("Running predictions from generator...")
             predictions = model.predict(test_generator)
-            return predictions.flatten()
         elif X_test is not None:
             # Array-based prediction
-            return model.predict(X_test).flatten()
+            predictions = model.predict(X_test)
         else:
             raise ValueError("Either X_test or test_generator must be provided")
+        
+        # Convert class probabilities to age values
+        # predictions shape: (N, 8) for 8 age classes
+        # Take argmax to get predicted class, then convert to age (using class midpoint)
+        if predictions.ndim > 1 and predictions.shape[1] > 1:
+            predicted_classes = np.argmax(predictions, axis=1)
+            # Convert class index to age (use midpoint of age range)
+            predicted_ages = np.array([self._class_to_age(cls) for cls in predicted_classes])
+            return predicted_ages
+        else:
+            # Single output (regression model) - just flatten
+            return predictions.flatten()
+    
+    def _class_to_age(self, class_idx):
+        """Convert age class index to representative age value (midpoint of range)."""
+        min_age, max_age = self.age_classes[class_idx]
+        if max_age is None:
+            # For open-ended class (e.g., 75+), use min_age + 10 as estimate
+            return min_age + 10
+        else:
+            # Use midpoint of age range
+            return (min_age + max_age) / 2.0
 
     def _print_summary(self, actual_classes, predicted_classes, predictions_len):
         valid_mask = (actual_classes != None) & (predicted_classes != None)
