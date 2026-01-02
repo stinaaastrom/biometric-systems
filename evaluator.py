@@ -284,19 +284,8 @@ class Evaluation:
             predictions = self._predict(model, test_generator=test_generator)
             # Get age labels from generator (one-hot encoded)
             age_test = np.argmax(test_generator.labels, axis=1)
-            
-            # Collect images from generator for worst image saving
-            if top_n > 0:
-                print(f"Collecting images from generator for worst {top_n} predictions...")
-                # Collect all images from generator
-                X_test_list = []
-                for i in range(len(test_generator)):
-                    batch_images, _ = test_generator[i]
-                    X_test_list.append(batch_images)
-                X_test = np.concatenate(X_test_list, axis=0)
-                print(f"Collected {len(X_test)} images from generator")
-            else:
-                X_test = None
+            # Skip worst image saving (too memory intensive to collect all images)
+            X_test = None
                 
         # Handle array-based evaluation
         elif X_test is not None and age_test is not None:
@@ -319,9 +308,8 @@ class Evaluation:
         self._demographic_analysis(actual_classes, predicted_classes, gen_test, etn_test)
         self._plot_metrics(history, actual_classes, predicted_classes)
         
-        # Save worst images if we have X_test array and top_n > 0
-        if X_test is not None and top_n > 0:
-            self._save_worst_images(X_test, predictions, age_test, top_n=top_n, output_dir=output_dir)
+        # Note: Worst image saving disabled - too memory intensive with large test sets
+        # If needed, can be enabled for array-based evaluation only
 
         return accuracy, correct_predictions, incorrect
 
