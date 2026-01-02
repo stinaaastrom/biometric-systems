@@ -303,8 +303,10 @@ class Evaluation:
         if test_generator is not None:
             print("Using generator-based evaluation (memory efficient)...")
             predictions = self._predict(model, test_generator=test_generator)
-            # Get age labels from generator (one-hot encoded)
-            age_test = np.argmax(test_generator.labels, axis=1)
+            # Get age class indices from generator (one-hot encoded -> class indices)
+            actual_classes = np.argmax(test_generator.labels, axis=1)
+            # Convert class indices to ages for MAE calculation
+            age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
             # Skip worst image saving (too memory intensive to collect all images)
             X_test = None
                 
@@ -313,13 +315,16 @@ class Evaluation:
             predictions = self._predict(model, X_test=X_test)
             # Convert one-hot encoded labels if needed
             if age_test.ndim > 1:
-                age_test = np.argmax(age_test, axis=1)
+                actual_classes = np.argmax(age_test, axis=1)
+                age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
+            else:
+                # age_test is actual ages - convert to classes
+                actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         else:
             raise ValueError("Either test_generator or both X_test and age_test must be provided")
         
-        # Calculate predicted and actual classes
+        # Calculate predicted classes from predicted ages
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
-        actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
 
         # Print all evaluation metrics
         accuracy, correct_predictions, incorrect = self._print_summary(actual_classes, predicted_classes, len(predictions))
