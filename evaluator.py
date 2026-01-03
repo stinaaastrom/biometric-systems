@@ -286,9 +286,23 @@ class Evaluation:
         age_test = age_test[valid_mask].astype(float)
         predictions = predictions[valid_mask]
 
+        # Clamp predictions to a minimum valid age to avoid None classes from negatives
+        min_valid_age = self.age_classes[0][0]
+        predictions = np.clip(predictions, min_valid_age, None)
+
         # Calculate predicted and actual classes on the filtered data
         actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
+
+        # Drop samples that still lack valid class mapping to avoid downstream errors
+        class_valid_mask = (actual_classes != None) & (predicted_classes != None)
+        if not np.any(class_valid_mask):
+            raise ValueError("No valid age classes found after filtering")
+
+        age_test = age_test[class_valid_mask]
+        predictions = predictions[class_valid_mask]
+        actual_classes = actual_classes[class_valid_mask]
+        predicted_classes = predicted_classes[class_valid_mask]
 
         # Print all evaluation metrics
         accuracy, correct_predictions, incorrect = self._print_summary(actual_classes, predicted_classes, len(predictions))
