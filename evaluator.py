@@ -266,7 +266,28 @@ class Evaluation:
             age_test = np.concatenate(age_test_list)
             actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         
-        # Calculate predicted classes from predicted ages
+        # Drop any samples where age is None/NaN to avoid comparison errors
+        age_test = np.array(age_test, dtype=object)
+        predictions = np.array(predictions, dtype=float)
+        valid_mask = []
+        for idx, age_val in enumerate(age_test):
+            if age_val is None:
+                valid_mask.append(False)
+                continue
+            if isinstance(age_val, float) and np.isnan(age_val):
+                valid_mask.append(False)
+                continue
+            valid_mask.append(True)
+        valid_mask = np.array(valid_mask, dtype=bool)
+
+        if not np.any(valid_mask):
+            raise ValueError("No valid age labels found for evaluation")
+
+        age_test = age_test[valid_mask].astype(float)
+        predictions = predictions[valid_mask]
+
+        # Calculate predicted and actual classes on the filtered data
+        actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
 
         # Print all evaluation metrics

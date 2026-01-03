@@ -87,22 +87,15 @@ class AgePrediction:
         face_img_normalized = face_img.astype(np.float32) / 255.0
         face_img_normalized = face_img_normalized.reshape(1, IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
         
-        # Predict age class (returns probabilities for 8 classes)
-        predictions = self.cnn_model.model.predict(face_img_normalized, verbose=0)[0]
-        predicted_class = np.argmax(predictions)
-        confidence = predictions[predicted_class] * 100
-        
-        # Convert class to age range
-        min_age, max_age = AGE_CLASSES[predicted_class]
-        if max_age is None:
-            age_range = f"{min_age}+"
-            predicted_age_value = min_age + 5  # Use middle of range for display
-        else:
-            age_range = f"{min_age}-{max_age}"
-            predicted_age_value = (min_age + max_age) / 2
-        
-        print(f"\nPredicted age class: {age_range} (confidence: {confidence:.1f}%)")
-        print(f"Estimated age: {predicted_age_value:.0f} years")
+        # Predict age as a scalar (regression head outputs shape (1, 1))
+        predicted_age_value = float(self.cnn_model.model.predict(face_img_normalized, verbose=0)[0][0])
+        predicted_class = self.cnn_model.find_age_class(predicted_age_value)
+        min_age, max_age = AGE_CLASSES[predicted_class] if predicted_class is not None else (None, None)
+        age_range = f"{min_age}-{max_age}" if max_age else f"{min_age}+" if min_age is not None else "unknown"
+
+        print(f"\nEstimated age: {predicted_age_value:.1f} years")
+        if predicted_class is not None:
+            print(f"Age range bucket: {age_range}")
         
         # Display result
         DatasetVisualizer.display_prediction(face_img, predicted_age_value)

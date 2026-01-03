@@ -7,7 +7,6 @@ import random
 import shutil
 from collections import defaultdict
 from sklearn.model_selection import train_test_split
-from keras.utils import to_categorical
 
 from image_processing import ImageProcesser
 from constants import AGE_CLASSES, IMAGE_SIZE
@@ -345,9 +344,9 @@ class DatasetProcessor:
             #self.ages = all_ages
             #train_idx = self._balance_indices(train_idx)
         
-        # One-hot encode labels
-        labels = to_categorical(age_classes, num_classes=8)
-        
+        # Use scalar ages as regression targets
+        labels = all_ages
+
         # Extract train/test data
         train_paths = all_paths[train_idx]
         train_labels = labels[train_idx]
