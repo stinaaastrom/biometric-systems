@@ -26,12 +26,14 @@ class Evaluation:
         print("Running predictions from generator...")
         predictions = model.predict(test_generator)
         
-        # Convert class probabilities to age values
-        # predictions shape: (N, 8) for 8 age classes
-        # Take argmax to get predicted class, then convert to age (using class midpoint)
-        predicted_classes = np.argmax(predictions, axis=1)
-        # Convert class index to age (use midpoint of age range)
-        predicted_ages = np.array([self._class_to_age(cls) for cls in predicted_classes])
+        # For regression model: predictions shape is (N, 1) - direct age values
+        # Flatten to 1D array of ages
+        if predictions.ndim == 2 and predictions.shape[1] == 1:
+            predicted_ages = predictions.flatten()
+        else:
+            # Fallback for other shapes
+            predicted_ages = predictions.ravel()
+        
         return predicted_ages
     
     def _class_to_age(self, class_idx):
@@ -234,14 +236,35 @@ class Evaluation:
         """
         print("Using generator-based evaluation (memory efficient)...")
         
-        # Get predictions from generator
+        # Get predictions from generator (regression: direct age values)
         predictions = self._predict(model, test_generator)
         
-        # Get age class indices from generator (one-hot encoded -> class indices)
-        actual_classes = np.argmax(test_generator.labels, axis=1)
-        
-        # Convert class indices to ages for MAE calculation
-        age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
+        # Get actual age values from generator
+        # Check if labels are one-hot encoded (classification) or scalar (regression)
+        if hasattr(test_generator, 'labels'):
+            labels = test_generator.labels
+            if labels.ndim == 2 and labels.shape[1] > 1:
+                # One-hot encoded - convert to class indices then to ages
+                actual_classes = np.argmax(labels, axis=1)
+                age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
+            else:
+                # Already scalar ages
+                age_test = labels.flatten() if labels.ndim > 1 else labels
+                actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
+        else:
+            # Fallback: collect from generator batches
+            age_test_list = []
+            for i in range(len(test_generator)):
+                _, y_batch = test_generator[i]
+                if y_batch.ndim == 2 and y_batch.shape[1] > 1:
+                    # One-hot to ages
+                    batch_classes = np.argmax(y_batch, axis=1)
+                    batch_ages = np.array([self._class_to_age(cls) for cls in batch_classes])
+                else:
+                    batch_ages = y_batch.flatten() if y_batch.ndim > 1 else y_batch
+                age_test_list.append(batch_ages)
+            age_test = np.concatenate(age_test_list)
+            actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         
         # Calculate predicted classes from predicted ages
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])

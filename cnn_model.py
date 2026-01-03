@@ -91,76 +91,102 @@ class CNNModel:
 
 
 
-    def build_cnn_model(self, epochs_stage1=10, epochs_stage2=25, lr_stage1=1e-3, lr_stage2=1e-5, fine_tune_percent=0.3):
+    def build_cnn_model(
+            self,
+            epochs_stage1=10,
+            epochs_stage2=25,
+            lr_stage1=1e-3,
+            lr_stage2=1e-5,
+            fine_tune_percent=0.3
+        ):
         """
-        Build and train EfficientNet model in two stages:
-        1. Feature extractor (freeze backbone, train top layers)
-        2. Fine-tuning (unfreeze last 20-30% of backbone)
-        
-        Supports automatic TPU detection and distributed training.
+        Build and train EfficientNet age REGRESSION model in two stages:
+        1. Feature extractor (freeze backbone)
+        2. Fine-tuning (unfreeze last % of backbone)
         """
 
         inputs = Input(shape=(224, 224, 3))
         x = Lambda(preprocess_input)(inputs)
-        base_model = EfficientNetB0(include_top=False, input_tensor=x, weights="imagenet")
+
+        base_model = EfficientNetB0(
+            include_top=False,
+            input_tensor=x,
+            weights="imagenet"
+        )
+
         x = base_model.output
         x = GlobalAveragePooling2D()(x)
-        x = Dropout(0.3)(x)
-        x = Dense(128, activation="relu")(x)
-        x = BatchNormalization()(x)
-        x = Dropout(0.4)(x)
 
-        output = Dense(8, activation="softmax")(x)
+        x = Dense(256, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.3)(x)
+
+        #  Regression output
+        output = Dense(1, activation="linear")(x)
+
         model = Model(inputs=base_model.input, outputs=output)
 
-        # Stage 1: Freeze entire backbone
+        # -------------------
+        # Stage 1 – freeze backbone
+        # -------------------
         for layer in base_model.layers:
             layer.trainable = False
-        
-        # Compile the model
-        model.compile(optimizer=Adam(learning_rate=lr_stage1), loss="categorical_crossentropy", metrics=["accuracy"])
-        
+
+        model.compile(
+            optimizer=Adam(learning_rate=lr_stage1),
+            loss="mae",
+            metrics=["mae"]
+        )
+
         model.summary()
 
         callbacks = [
-            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
+            EarlyStopping(
+                monitor="val_mae",
+                patience=5,
+                restore_best_weights=True
+            ),
+            ReduceLROnPlateau(
+                monitor="val_mae",
+                factor=0.5,
+                patience=2,
+                min_lr=1e-6
+            )
         ]
 
-        if self.train_generator is not None and self.test_generator is not None:
-            print("\n--- Stage 1: Feature extractor (freeze backbone, train top layers) ---")
-            self.history = model.fit(
-                self.train_generator,
-                validation_data=self.test_generator,
-                epochs=epochs_stage1,
-                callbacks=callbacks
-            )
-        else:
-            raise ValueError("No training data available.")
+        print("\n--- Stage 1: Feature extractor (regression) ---")
+        self.history = model.fit(
+            self.train_generator,
+            validation_data=self.test_generator,
+            epochs=epochs_stage1,
+            callbacks=callbacks
+        )
 
-        # Stage 2: Fine-tuning (unfreeze last 20-30% of backbone)
+        # -------------------
+        # Stage 2 – fine-tuning
+        # -------------------
         n_layers = len(base_model.layers)
         n_unfreeze = int(n_layers * fine_tune_percent)
+
         for layer in base_model.layers[-n_unfreeze:]:
             layer.trainable = True
-        
-        # Compile the model
-        model.compile(optimizer=Adam(learning_rate=lr_stage2), loss="categorical_crossentropy", metrics=["accuracy"])
-        
-        callbacks_stage2 = [
-            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=2, min_lr=1e-6)
-        ]
 
-        print(f"\n--- Stage 2: Fine-tuning (unfreeze last {fine_tune_percent*100:.0f}% of backbone) ---")
+        model.compile(
+            optimizer=Adam(learning_rate=lr_stage2),
+            loss="mae",
+            metrics=["mae"]
+        )
+
+        print(f"\n--- Stage 2: Fine-tuning last {fine_tune_percent*100:.0f}% ---")
         self.history_finetune = model.fit(
             self.train_generator,
             validation_data=self.test_generator,
             epochs=epochs_stage2,
-            callbacks=callbacks_stage2
+            callbacks=callbacks
         )
 
         self.model = model
+
 
 
     def evaluate_model_performance(self, test_generator=None, gen_test=None, etn_test=None):

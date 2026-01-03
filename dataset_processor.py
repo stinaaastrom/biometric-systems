@@ -307,7 +307,7 @@ class DatasetProcessor:
                 return idx
         return None
 
-    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=True, overwrite_preprocess=False):
+    def generate_dataset(self, batch_size=32, test_size=0.2, balance_train=False, overwrite_preprocess=False):
         """
         Prepare balanced train/test generators using pre-cropped faces on disk.
         """
@@ -342,8 +342,8 @@ class DatasetProcessor:
         if balance_train:
             print("\nBalancing training data...")
             # Store metadata temporarily for balancing
-            self.ages = all_ages
-            train_idx = self._balance_indices(train_idx)
+            #self.ages = all_ages
+            #train_idx = self._balance_indices(train_idx)
         
         # One-hot encode labels
         labels = to_categorical(age_classes, num_classes=8)
