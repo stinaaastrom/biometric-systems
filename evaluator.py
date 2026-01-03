@@ -34,6 +34,22 @@ class Evaluation:
             # Fallback for other shapes
             predicted_ages = predictions.ravel()
         
+        # DEBUG: Print prediction statistics to diagnose normalization issues
+        print(f"\n[DEBUG] Prediction Statistics:")
+        print(f"  Min prediction: {np.min(predicted_ages):.4f}")
+        print(f"  Max prediction: {np.max(predicted_ages):.4f}")
+        print(f"  Mean prediction: {np.mean(predicted_ages):.4f}")
+        print(f"  Median prediction: {np.median(predicted_ages):.4f}")
+        print(f"  First 10 predictions: {predicted_ages[:10]}")
+        
+        # Check if predictions appear to be normalized (range 0-1)
+        if np.max(predicted_ages) <= 1.5 and np.min(predicted_ages) >= -0.5:
+            print("\n⚠️  WARNING: Predictions appear to be NORMALIZED (0-1 range)")
+            print("   This suggests labels were divided by 100 during training.")
+            print("   Denormalizing predictions by multiplying by 100...")
+            predicted_ages = predicted_ages * 100.0
+            print(f"   After denormalization - Min: {np.min(predicted_ages):.2f}, Max: {np.max(predicted_ages):.2f}")
+        
         return predicted_ages
     
     def _class_to_age(self, class_idx):
@@ -287,8 +303,14 @@ class Evaluation:
         predictions = predictions[valid_mask]
 
         # Clamp predictions to a minimum valid age to avoid None classes from negatives
-        min_valid_age = self.age_classes[0][0]
-        predictions = np.clip(predictions, min_valid_age, None)
+        predictions = np.clip(predictions, 0, 110)
+
+        mae = np.mean(np.abs(predictions - age_test))
+        median_mae = np.median(np.abs(predictions - age_test))
+
+        print(f"Overall MAE: {mae:.2f} years")
+        print(f"Median MAE:  {median_mae:.2f} years")
+
 
         # Calculate predicted and actual classes on the filtered data
         actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
