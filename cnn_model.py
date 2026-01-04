@@ -29,6 +29,35 @@ from keras.utils import to_categorical
 
 from constants import AGE_CLASSES
 from evaluator import Evaluation
+from data_generator import AGE_NORMALIZATION_FACTOR
+
+
+# Custom callback to log predictions during training
+class PredictionLogger(Callback):
+    """Log sample predictions during training for debugging"""
+    def __init__(self, test_generator, log_frequency=5):
+        super().__init__()
+        self.test_generator = test_generator
+        self.log_frequency = log_frequency
+    
+    def on_epoch_end(self, epoch, logs=None):
+        if (epoch + 1) % self.log_frequency == 0:
+            # Get a batch of test data
+            X_batch, y_batch = self.test_generator[0]
+            
+            # Make predictions
+            predictions = self.model.predict(X_batch, verbose=0)
+            predictions = predictions.flatten()[:5]  # First 5 predictions
+            targets = y_batch[:5]  # First 5 targets
+            
+            # Denormalize for display
+            pred_ages = predictions * AGE_NORMALIZATION_FACTOR
+            target_ages = targets * AGE_NORMALIZATION_FACTOR
+            
+            print(f"\n[Epoch {epoch + 1}] Sample Predictions (normalized | denormalized):")
+            for i, (pred, target) in enumerate(zip(predictions, targets)):
+                print(f"  Sample {i+1}: Pred {pred:.4f} ({pred_ages[i]:.1f} y) | Target {target:.4f} ({target_ages[i]:.1f} y)")
+
 
 # Default path for model files (absolute path)
 import os
@@ -134,7 +163,7 @@ class CNNModel:
 
         model.compile(
             optimizer=Adam(learning_rate=lr_stage1),
-            loss="mae",
+            loss=tf.keras.losses.Huber(delta=0.1),
             metrics=["mae"]
         )
 
@@ -142,16 +171,17 @@ class CNNModel:
 
         callbacks = [
             EarlyStopping(
-                monitor="val_mae",
+                monitor="val_loss",
                 patience=5,
                 restore_best_weights=True
             ),
             ReduceLROnPlateau(
-                monitor="val_mae",
+                monitor="val_loss",
                 factor=0.5,
                 patience=2,
                 min_lr=1e-6
-            )
+            ),
+            PredictionLogger(self.test_generator, log_frequency=5)
         ]
 
         print("\n--- Stage 1: Feature extractor (regression) ---")
@@ -173,7 +203,7 @@ class CNNModel:
 
         model.compile(
             optimizer=Adam(learning_rate=lr_stage2),
-            loss="mae",
+            loss=tf.keras.losses.Huber(delta=0.1),
             metrics=["mae"]
         )
 

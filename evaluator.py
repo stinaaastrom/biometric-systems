@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
 import cv2
+from data_generator import AGE_NORMALIZATION_FACTOR
 
 
 class Evaluation:
@@ -35,20 +36,20 @@ class Evaluation:
             predicted_ages = predictions.ravel()
         
         # DEBUG: Print prediction statistics to diagnose normalization issues
-        print(f"\n[DEBUG] Prediction Statistics:")
-        print(f"  Min prediction: {np.min(predicted_ages):.4f}")
-        print(f"  Max prediction: {np.max(predicted_ages):.4f}")
-        print(f"  Mean prediction: {np.mean(predicted_ages):.4f}")
-        print(f"  Median prediction: {np.median(predicted_ages):.4f}")
+        print(f"\n[DEBUG] Prediction Statistics (raw from model):")
+        print(f"  Min prediction: {np.min(predicted_ages):.6f}")
+        print(f"  Max prediction: {np.max(predicted_ages):.6f}")
+        print(f"  Mean prediction: {np.mean(predicted_ages):.6f}")
         print(f"  First 10 predictions: {predicted_ages[:10]}")
         
-        # Check if predictions appear to be normalized (range 0-1)
-        if np.max(predicted_ages) <= 1.5 and np.min(predicted_ages) >= -0.5:
-            print("\n⚠️  WARNING: Predictions appear to be NORMALIZED (0-1 range)")
-            print("   This suggests labels were divided by 100 during training.")
-            print("   Denormalizing predictions by multiplying by 100...")
-            predicted_ages = predicted_ages * 100.0
-            print(f"   After denormalization - Min: {np.min(predicted_ages):.2f}, Max: {np.max(predicted_ages):.2f}")
+        # Denormalize predictions (model was trained with normalized labels)
+        print(f"\n[DENORMALIZATION] Multiplying predictions by {AGE_NORMALIZATION_FACTOR}...")
+        predicted_ages = predicted_ages * AGE_NORMALIZATION_FACTOR
+        
+        print(f"[DEBUG] Prediction Statistics (after denormalization):")
+        print(f"  Min prediction: {np.min(predicted_ages):.2f} years")
+        print(f"  Max prediction: {np.max(predicted_ages):.2f} years")
+        print(f"  Mean prediction: {np.mean(predicted_ages):.2f} years")
         
         return predicted_ages
     
@@ -256,9 +257,17 @@ class Evaluation:
         predictions = self._predict(model, test_generator)
         
         # Get actual age values from generator
-        # Check if labels are one-hot encoded (classification) or scalar (regression)
+        # Note: test_generator.labels always contains ORIGINAL (non-normalized) age values
+        # Predictions are normalized (0-1 range) and get denormalized in _predict()
         if hasattr(test_generator, 'labels'):
             labels = test_generator.labels
+            
+            # DEBUG: Print label statistics
+            print(f"\n[DEBUG] Label Statistics (original ages from generator.labels):")
+            print(f"  Min label: {np.min(labels):.2f}")
+            print(f"  Max label: {np.max(labels):.2f}")
+            print(f"  Mean label: {np.mean(labels):.2f}")
+            
             if labels.ndim == 2 and labels.shape[1] > 1:
                 # One-hot encoded - convert to class indices then to ages
                 actual_classes = np.argmax(labels, axis=1)

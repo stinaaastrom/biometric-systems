@@ -15,6 +15,7 @@ from dataset_processor import DatasetProcessor
 from image_processing import ImageProcesser
 from visualization import DatasetVisualizer
 from constants import IMAGE_SIZE
+from data_generator import AGE_NORMALIZATION_FACTOR
 
 # Default path for saving/loading trained models
 AGE_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'models', 'age_model.keras')
@@ -88,7 +89,9 @@ class AgePrediction:
         face_img_normalized = face_img_normalized.reshape(1, IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
         
         # Predict age as a scalar (regression head outputs shape (1, 1))
-        predicted_age_value = float(self.cnn_model.model.predict(face_img_normalized, verbose=0)[0][0])
+        # Model outputs normalized age (0-1 range), so denormalize it
+        predicted_age_normalized = float(self.cnn_model.model.predict(face_img_normalized, verbose=0)[0][0])
+        predicted_age_value = predicted_age_normalized * AGE_NORMALIZATION_FACTOR
         predicted_class = self.cnn_model.find_age_class(predicted_age_value)
         min_age, max_age = AGE_CLASSES[predicted_class] if predicted_class is not None else (None, None)
         age_range = f"{min_age}-{max_age}" if max_age else f"{min_age}+" if min_age is not None else "unknown"
