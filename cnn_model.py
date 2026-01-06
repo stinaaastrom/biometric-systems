@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy('mixed_float16')
-from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.applications import EfficientNetB2
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
@@ -137,7 +137,7 @@ class CNNModel:
         inputs = Input(shape=(224, 224, 3))
         x = Lambda(preprocess_input)(inputs)
 
-        base_model = EfficientNetB0(
+        base_model = EfficientNetB2(
             include_top=False,
             input_tensor=x,
             weights="imagenet"
@@ -146,12 +146,21 @@ class CNNModel:
         x = base_model.output
         x = GlobalAveragePooling2D()(x)
 
+        # Wider and deeper head for increased model capacity
+        x = Dense(512, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.4)(x)
+        
         x = Dense(256, activation="relu")(x)
         x = BatchNormalization()(x)
         x = Dropout(0.3)(x)
+        
+        x = Dense(128, activation="relu")(x)
+        x = BatchNormalization()(x)
+        x = Dropout(0.2)(x)
 
-        #  Regression output
-        output = Dense(1, activation="linear")(x)
+        #  Regression output (sigmoid constrains output to [0, 1] range)
+        output = Dense(1, activation="sigmoid")(x)
 
         model = Model(inputs=base_model.input, outputs=output)
 
@@ -163,7 +172,7 @@ class CNNModel:
 
         model.compile(
             optimizer=Adam(learning_rate=lr_stage1),
-            loss=tf.keras.losses.Huber(delta=0.1),
+            loss="mse",  # MSE works better with sigmoid for normalized regression
             metrics=["mae"]
         )
 
@@ -199,11 +208,13 @@ class CNNModel:
         n_unfreeze = int(n_layers * fine_tune_percent)
 
         for layer in base_model.layers[-n_unfreeze:]:
-            layer.trainable = True
+            # Unfreeze layer but keep BatchNorm layers frozen to prevent distribution shift
+            if not isinstance(layer, BatchNormalization):
+                layer.trainable = True
 
         model.compile(
             optimizer=Adam(learning_rate=lr_stage2),
-            loss=tf.keras.losses.Huber(delta=0.1),
+            loss="mse",  # MSE works better with sigmoid for normalized regression
             metrics=["mae"]
         )
 

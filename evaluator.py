@@ -64,8 +64,8 @@ class Evaluation:
             return (min_age + max_age) / 2.0
 
     def _print_summary(self, actual_classes, predicted_classes, predictions_len):
-        valid_mask = (actual_classes != None) & (predicted_classes != None)
-        correct_predictions = int(np.sum((predicted_classes[valid_mask] == actual_classes[valid_mask])))
+        # At this point, actual_classes and predicted_classes should already be filtered (no None values)
+        correct_predictions = int(np.sum(predicted_classes == actual_classes))
         total_predictions = int(predictions_len)
         accuracy = (correct_predictions / total_predictions * 100.0) if total_predictions > 0 else 0.0
 
@@ -88,8 +88,8 @@ class Evaluation:
         print("\n" + "="*50)
         print("Classification Report by Age Period")
         print("="*50)
+        # At this point, data should already be filtered (no None values)
         unique_classes = np.unique(np.concatenate([actual_classes, predicted_classes]))
-        unique_classes = unique_classes[unique_classes != None]
         labels = sorted([int(c) for c in unique_classes])
         age_class_labels = [
             f"{self.age_classes[i][0]}-{self.age_classes[i][1]}" if self.age_classes[i][1] else f"{self.age_classes[i][0]}+"
@@ -112,11 +112,10 @@ class Evaluation:
         for class_idx in range(len(self.age_classes)):
             min_age, max_age = self.age_classes[class_idx]
             class_label = f"{min_age}-{max_age}" if max_age else f"{min_age}+"
-            valid_actual = actual_classes != None
-            valid_pred = predicted_classes != None
-            true_mask = valid_actual & (actual_classes == class_idx)
+            # At this point, data should already be filtered (no None values)
+            true_mask = (actual_classes == class_idx)
             true_count = int(np.sum(true_mask))
-            pred_mask = valid_pred & (predicted_classes == class_idx)
+            pred_mask = (predicted_classes == class_idx)
             pred_count = int(np.sum(pred_mask))
             correct_count = int(np.sum(true_mask & (predicted_classes == class_idx)))
             if true_count > 0:
@@ -326,7 +325,17 @@ class Evaluation:
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
 
         # Drop samples that still lack valid class mapping to avoid downstream errors
-        class_valid_mask = (actual_classes != None) & (predicted_classes != None)
+        class_valid_mask = np.array([(a is not None and p is not None) 
+                                      for a, p in zip(actual_classes, predicted_classes)])
+        
+        invalid_count = np.sum(~class_valid_mask)
+        if invalid_count > 0:
+            print(f"\n[WARNING] Filtering out {invalid_count} predictions with invalid age classes (out of range)")
+            # Show some examples of invalid predictions
+            invalid_idx = np.where(~class_valid_mask)[0][:5]
+            for idx in invalid_idx:
+                print(f"  Example: predicted={predictions[idx]:.1f}, actual={age_test[idx]:.1f}")
+        
         if not np.any(class_valid_mask):
             raise ValueError("No valid age classes found after filtering")
 
