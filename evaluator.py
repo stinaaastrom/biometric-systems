@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
 import cv2
 from data_generator import AGE_NORMALIZATION_FACTOR
 
@@ -134,6 +134,122 @@ class Evaluation:
             print(f"  Mean Absolute Error: {mae:.2f} years")
         print("\n" + "="*50 + "\n")
 
+    def _decision_policy(self, pred_age):
+        """Decision policy based on predicted age.
+
+        Returns: 'approved' (>25), 'denied' (<18), 'human_review' (18-25).
+        """
+        if pred_age > 25:
+            return 'approved'
+        if pred_age < 18:
+            return 'denied'
+        return 'human_review'
+
+    def _print_decision_summary(self, predicted_ages):
+        decisions = np.array([self._decision_policy(a) for a in predicted_ages])
+        total = int(decisions.size)
+        if total == 0:
+            return
+        approved = int(np.sum(decisions == 'approved'))
+        denied = int(np.sum(decisions == 'denied'))
+        human = int(np.sum(decisions == 'human_review'))
+
+        print("\n" + "="*50)
+        print("Decision Policy Summary")
+        print("="*50)
+        print(f"Approved (>25): {approved} ({approved/total*100:.2f}%)")
+        print(f"Denied (<18): {denied} ({denied/total*100:.2f}%)")
+        print(f"Human review (18-25): {human} ({human/total*100:.2f}%)")
+        print("\n" + "="*50 + "\n")
+
+    def _compute_and_print_binary_metrics(self, predicted_ages, age_test, output_dir=None):
+        """Compute FPR/FNR and ROC/AUC for adult (>=18) using regression ages.
+
+        Also prints special FPR: minors (<18) predicted as >15.
+        """
+        ages_true = np.asarray(age_test)
+        ages_pred = np.asarray(predicted_ages)
+
+        y_true_adult = ages_true >= 18
+        y_pred_adult = ages_pred >= 18
+
+        minors_mask = ~y_true_adult
+        adults_mask = y_true_adult
+        fpr_18 = float(np.sum(minors_mask & y_pred_adult)) / float(np.sum(minors_mask)) if np.sum(minors_mask) > 0 else 0.0
+        fnr_18 = float(np.sum(adults_mask & (~y_pred_adult))) / float(np.sum(adults_mask)) if np.sum(adults_mask) > 0 else 0.0
+
+        fpr_minors_over15 = float(np.sum((ages_true < 18) & (ages_pred > 15))) / float(np.sum(ages_true < 18)) if np.sum(ages_true < 18) > 0 else 0.0
+
+        # Use normalized predicted age as score proxy for ROC
+        adult_scores = np.clip(ages_pred / 80.0, 0.0, 1.0)
+        try:
+            fpr_curve, tpr_curve, _ = roc_curve(y_true_adult.astype(int), adult_scores)
+            auc_val = auc(fpr_curve, tpr_curve)
+        except Exception:
+            fpr_curve, tpr_curve, auc_val = None, None, None
+
+        print("\n" + "="*50)
+        print("Binary Metrics (Adult >=18)")
+        print("="*50)
+        print(f"FPR @18 (minors predicted adult): {fpr_18:.4f}")
+        print(f"FNR @18 (adults predicted minor): {fnr_18:.4f}")
+        print(f"Special FPR (minors predicted >15): {fpr_minors_over15:.4f}")
+        if auc_val is not None:
+            print(f"ROC AUC (adult score): {auc_val:.4f}")
+        print("\n" + "="*50 + "\n")
+
+        if auc_val is not None:
+            self._plot_roc_curve(fpr_curve, tpr_curve, auc_val, output_dir=output_dir)
+
+    def _plot_roc_curve(self, fpr, tpr, auc_val, output_dir=None):
+        plt.figure(figsize=(6, 5))
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {auc_val:.3f})')
+        plt.plot([0, 0, 1], [0, 1, 1], color='navy', lw=1, linestyle='--', label='Ideal')
+        plt.plot([0, 1], [0, 1], color='gray', lw=1, linestyle=':', label='Chance')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve - Adult (>=18) Detection')
+        plt.legend(loc="lower right")
+        plt.tight_layout()
+
+        save_dir = output_dir or os.path.join(os.path.dirname(__file__), 'reports')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'roc_curve_adult_detection.png')
+        plt.savefig(save_path, dpi=150)
+        print(f"ROC curve saved to: {save_path}")
+        plt.show()
+
+    def _print_policy_summary(self, predicted_ages, age_test):
+        """Policy summary where only severe errors count:
+        - Minor (<18) predicted as >25
+        - Adult (>25) predicted as <18
+
+        Returns (accuracy_percent, correct_count, incorrect_count)
+        """
+        ages_true = np.asarray(age_test)
+        ages_pred = np.asarray(predicted_ages)
+        total = ages_true.size
+
+        minors_pred_over25 = (ages_true < 18) & (ages_pred > 25)
+        adults_pred_under18 = (ages_true > 25) & (ages_pred < 18)
+        severe_errors_mask = minors_pred_over25 | adults_pred_under18
+
+        n_severe = int(np.sum(severe_errors_mask))
+        n_correct = int(total - n_severe)
+        acc = (n_correct / total * 100.0) if total > 0 else 0.0
+
+        print("\n" + "="*50)
+        print("POLICY EVALUATION RESULTS - SEVERE ERRORS ONLY")
+        print("="*50)
+        print(f"Total predictions: {total}")
+        print(f"Severe errors: {n_severe}")
+        print(f"  - Minor (<18) predicted >25: {int(np.sum(minors_pred_over25))}")
+        print(f"  - Adult (>25) predicted <18: {int(np.sum(adults_pred_under18))}")
+        print(f"Policy Accuracy: {acc:.2f}% (non-severe)")
+        return acc, n_correct, n_severe
+
     def _print_under18_over25_analysis(self, predictions, age_test, actual_classes):
         UNDER_18_THRESHOLD = 18
         OVER_25_THRESHOLD = 25
@@ -236,7 +352,7 @@ class Evaluation:
         plt.tight_layout()
         plt.show()
 
-    def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None):
+    def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None, output_dir=None):
         """
         Evaluate model performance using test generator.
         
@@ -344,8 +460,11 @@ class Evaluation:
         actual_classes = actual_classes[class_valid_mask]
         predicted_classes = predicted_classes[class_valid_mask]
 
-        # Print all evaluation metrics
-        accuracy, correct_predictions, incorrect = self._print_summary(actual_classes, predicted_classes, len(predictions))
+        # Policy-based summary (severe errors only)
+        accuracy, correct_predictions, incorrect = self._print_policy_summary(predictions, age_test)
+        # Decision summary and binary metrics
+        self._print_decision_summary(predictions)
+        self._compute_and_print_binary_metrics(predictions, age_test, output_dir=output_dir)
         self._print_classification_report(actual_classes, predicted_classes)
         self._print_detailed_stats(predictions, age_test, actual_classes, predicted_classes)
         self._print_under18_over25_analysis(predictions, age_test, actual_classes)
