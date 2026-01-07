@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
 import cv2
 
 
@@ -22,17 +22,19 @@ class Evaluation:
         self.find_age_class_fn = find_age_class_fn
 
     def _predict(self, model, test_generator):
-        """Get predictions from model using generator."""
+        """Get predictions from model using generator.
+
+        Returns:
+            predicted_ages (np.ndarray): estimated ages using class midpoints
+            predicted_probs (np.ndarray): raw class probabilities (N, num_classes)
+        """
         print("Running predictions from generator...")
-        predictions = model.predict(test_generator)
-        
-        # Convert class probabilities to age values
-        # predictions shape: (N, 8) for 8 age classes
-        # Take argmax to get predicted class, then convert to age (using class midpoint)
-        predicted_classes = np.argmax(predictions, axis=1)
-        # Convert class index to age (use midpoint of age range)
+        predicted_probs = model.predict(test_generator)
+
+        # Convert class probabilities to age values via class midpoint of argmax
+        predicted_classes = np.argmax(predicted_probs, axis=1)
         predicted_ages = np.array([self._class_to_age(cls) for cls in predicted_classes])
-        return predicted_ages
+        return predicted_ages, predicted_probs
     
     def _class_to_age(self, class_idx):
         """Convert age class index to representative age value (midpoint of range)."""
@@ -116,6 +118,36 @@ class Evaluation:
             print(f"  Mean Absolute Error: {mae:.2f} years")
         print("\n" + "="*50 + "\n")
 
+    def _print_policy_summary(self, predicted_ages, age_test):
+        """Print summary where only severe errors count:
+        - Minor (<18) predicted as >25
+        - Adult (>25) predicted as <18
+
+        Returns (accuracy_percent, correct_count, incorrect_count)
+        where accuracy is 1 - severe_error_rate.
+        """
+        ages_true = np.asarray(age_test)
+        ages_pred = np.asarray(predicted_ages)
+        total = ages_true.size
+
+        minors_pred_over25 = (ages_true < 18) & (ages_pred > 25)
+        adults_pred_under18 = (ages_true > 25) & (ages_pred < 18)
+        severe_errors_mask = minors_pred_over25 | adults_pred_under18
+
+        n_severe = int(np.sum(severe_errors_mask))
+        n_correct = int(total - n_severe)
+        acc = (n_correct / total * 100.0) if total > 0 else 0.0
+
+        print("\n" + "="*50)
+        print("POLICY EVALUATION RESULTS - SEVERE ERRORS ONLY")
+        print("="*50)
+        print(f"Total predictions: {total}")
+        print(f"Severe errors: {n_severe}")
+        print(f"  - Minor (<18) predicted >25: {int(np.sum(minors_pred_over25))}")
+        print(f"  - Adult (>25) predicted <18: {int(np.sum(adults_pred_under18))}")
+        print(f"Policy Accuracy: {acc:.2f}% (non-severe)")
+        return acc, n_correct, n_severe
+
     def _print_under18_over25_analysis(self, predictions, age_test, actual_classes):
         UNDER_18_THRESHOLD = 18
         OVER_25_THRESHOLD = 25
@@ -148,6 +180,107 @@ class Evaluation:
                     share = breakdown[label] / total_critical * 100.0
                     print(f"  {label}: {breakdown[label]} ({share:.2f}%)")
         print("\n" + "="*50 + "\n")
+
+    def _decision_policy(self, pred_age):
+        """Apply decision policy based on predicted age.
+
+        Returns one of: 'approved', 'denied', 'human_review'.
+        """
+        if pred_age > 25:
+            return 'approved'
+        if pred_age < 18:
+            return 'denied'
+        return 'human_review'
+
+    def _print_decision_summary(self, predicted_ages):
+        decisions = np.array([self._decision_policy(a) for a in predicted_ages])
+        total = decisions.size
+        approved = int(np.sum(decisions == 'approved'))
+        denied = int(np.sum(decisions == 'denied'))
+        human = int(np.sum(decisions == 'human_review'))
+
+        print("\n" + "="*50)
+        print("Decision Policy Summary")
+        print("="*50)
+        print(f"Approved (>25): {approved} ({approved/total*100:.2f}%)")
+        print(f"Denied (<18): {denied} ({denied/total*100:.2f}%)")
+        print(f"Human review (18-25): {human} ({human/total*100:.2f}%)")
+        print("\n" + "="*50 + "\n")
+
+    def _compute_and_print_binary_metrics(self, predicted_ages, predicted_probs, age_test, output_dir=None):
+        """Compute FPR/FNR and ROC/AUC for adult (>=18) detection.
+
+        Also reports a special FPR for minors incorrectly classified as over 15.
+        """
+        ages = np.asarray(age_test)
+        preds_age = np.asarray(predicted_ages)
+
+        # Ground truth: adult if >=18
+        y_true_adult = ages >= 18
+
+        # Score: probability of being adult (sum of class probs with min_age>=18) if available,
+        # fallback to predicted ages normalized.
+        if predicted_probs is not None and predicted_probs.ndim == 2:
+            # Determine indices of classes where min_age >= 18
+            adult_class_idxs = [i for i, (min_age, _max) in enumerate(self.age_classes) if min_age >= 18]
+            adult_scores = predicted_probs[:, adult_class_idxs].sum(axis=1)
+        else:
+            # Normalize ages to [0,1] using a cap at, say, 80 years
+            adult_scores = np.clip(preds_age / 80.0, 0.0, 1.0)
+
+        # Binary prediction using 18 threshold on predicted age
+        y_pred_adult = preds_age >= 18
+
+        # FPR (minors predicted as adult at 18 threshold)
+        minors_mask = ~y_true_adult
+        adults_mask = y_true_adult
+        fpr_18 = float(np.sum(minors_mask & y_pred_adult)) / float(np.sum(minors_mask)) if np.sum(minors_mask) > 0 else 0.0
+        fnr_18 = float(np.sum(adults_mask & (~y_pred_adult))) / float(np.sum(adults_mask)) if np.sum(adults_mask) > 0 else 0.0
+
+        # Special FPR requested: minors (<18) predicted as >15
+        fpr_minors_over15 = float(np.sum((ages < 18) & (preds_age > 15))) / float(np.sum(ages < 18)) if np.sum(ages < 18) > 0 else 0.0
+
+        # ROC and AUC for adult detection
+        try:
+            fpr_curve, tpr_curve, _ = roc_curve(y_true_adult.astype(int), adult_scores)
+            auc_val = auc(fpr_curve, tpr_curve)
+        except Exception:
+            fpr_curve, tpr_curve, auc_val = None, None, None
+
+        print("\n" + "="*50)
+        print("Binary Metrics (Adult >=18)")
+        print("="*50)
+        print(f"FPR @18 (minors predicted adult): {fpr_18:.4f}")
+        print(f"FNR @18 (adults predicted minor): {fnr_18:.4f}")
+        print(f"Special FPR (minors predicted >15): {fpr_minors_over15:.4f}")
+        if auc_val is not None:
+            print(f"ROC AUC (adult score): {auc_val:.4f}")
+        print("\n" + "="*50 + "\n")
+
+        # Optionally save ROC curve plot
+        if auc_val is not None:
+            self._plot_roc_curve(fpr_curve, tpr_curve, auc_val, output_dir=output_dir)
+
+    def _plot_roc_curve(self, fpr, tpr, auc_val, output_dir=None):
+        plt.figure(figsize=(6, 5))
+        plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {auc_val:.3f})')
+        plt.plot([0, 0, 1], [0, 1, 1], color='navy', lw=1, linestyle='--', label='Ideal')
+        plt.plot([0, 1], [0, 1], color='gray', lw=1, linestyle=':', label='Chance')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve - Adult (>=18) Detection')
+        plt.legend(loc="lower right")
+        plt.tight_layout()
+
+        # Save to reports by default under project root
+        save_dir = output_dir or os.path.join(os.path.dirname(__file__), 'reports')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'roc_curve_adult_detection.png')
+        plt.savefig(save_path, dpi=150)
+        print(f"ROC curve saved to: {save_path}")
+        plt.show()
 
     def _demographic_analysis(self, actual_classes, predicted_classes, gen_test, etn_test):
         if gen_test is None or etn_test is None:
@@ -218,7 +351,7 @@ class Evaluation:
         plt.tight_layout()
         plt.show()
 
-    def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None):
+    def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None, output_dir=None):
         """
         Evaluate model performance using test generator.
         
@@ -235,7 +368,7 @@ class Evaluation:
         print("Using generator-based evaluation (memory efficient)...")
         
         # Get predictions from generator
-        predictions = self._predict(model, test_generator)
+        predicted_ages, predicted_probs = self._predict(model, test_generator)
         
         # Get age class indices from generator (one-hot encoded -> class indices)
         actual_classes = np.argmax(test_generator.labels, axis=1)
@@ -246,11 +379,14 @@ class Evaluation:
         # Calculate predicted classes from predicted ages
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predictions])
 
-        # Print all evaluation metrics
-        accuracy, correct_predictions, incorrect = self._print_summary(actual_classes, predicted_classes, len(predictions))
+        # Print policy-based summary (only count severe errors requested by user)
+        accuracy, correct_predictions, incorrect = self._print_policy_summary(predicted_ages, age_test)
         self._print_classification_report(actual_classes, predicted_classes)
-        self._print_detailed_stats(predictions, age_test, actual_classes, predicted_classes)
-        self._print_under18_over25_analysis(predictions, age_test, actual_classes)
+        self._print_detailed_stats(predicted_ages, age_test, actual_classes, predicted_classes)
+        self._print_under18_over25_analysis(predicted_ages, age_test, actual_classes)
+        # Decision policy summary and binary metrics with ROC/AUC
+        self._print_decision_summary(predicted_ages)
+        self._compute_and_print_binary_metrics(predicted_ages, predicted_probs, age_test, output_dir=output_dir)
         self._demographic_analysis(actual_classes, predicted_classes, gen_test, etn_test)
         self._plot_metrics(history, actual_classes, predicted_classes)
 
