@@ -68,9 +68,8 @@ class CNNModel:
     @staticmethod
     def find_age_class(predicted_age):
         """
-            Returns the index of the class an age belongs to.
-            Ages between classes are rounded to the nearest class.
-        Handles both scalar age and one-hot vector (e.g. [0 0 0 0 0 1 0 0]).
+        Returns the index of the class an age belongs to.
+        Ages between classes are rounded to the nearest class.
         """
         if isinstance(predicted_age, np.ndarray):
             # Only scalar arrays are allowed; no one-hot handling
@@ -78,30 +77,32 @@ class CNNModel:
                 predicted_age = float(predicted_age)
             else:
                 raise ValueError(f"find_age_class: predicted_age must be a scalar value, got shape {predicted_age.shape}")
+        else:
+            predicted_age = float(predicted_age)
 
-            # Handle ages below the first class
-            if predicted_age < AGE_CLASSES[0][0]:
-                return 0
-        
-            # Find the best matching class
-            for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
-                if max_age is None:
-                    # Last class (75+)
-                    if predicted_age >= min_age:
-                        return idx
-                elif min_age <= predicted_age <= max_age:
-                    # Age falls directly in this class
+        # Handle ages below the first class
+        if predicted_age < AGE_CLASSES[0][0]:
+            return 0
+
+        # Find the best matching class
+        for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
+            if max_age is None:
+                # Last class (75+)
+                if predicted_age >= min_age:
                     return idx
-                elif idx < len(AGE_CLASSES) - 1:
-                    # Check if age is between this class and the next
-                    next_min = AGE_CLASSES[idx + 1][0]
-                    if max_age < predicted_age < next_min:
-                        # Age is in the gap - assign to closer class
-                        midpoint = (max_age + next_min) / 2
-                        return idx if predicted_age < midpoint else idx + 1
-        
-            # Fallback: should not happen, but return last class if nothing matched
-            return len(AGE_CLASSES) - 1
+            elif min_age <= predicted_age <= max_age:
+                # Age falls directly in this class
+                return idx
+            elif idx < len(AGE_CLASSES) - 1:
+                # Check if age is between this class and the next
+                next_min = AGE_CLASSES[idx + 1][0]
+                if max_age < predicted_age < next_min:
+                    # Age is in the gap - assign to closer class
+                    midpoint = (max_age + next_min) / 2
+                    return idx if predicted_age < midpoint else idx + 1
+
+        # Fallback: should not happen, but return last class if nothing matched
+        return len(AGE_CLASSES) - 1
 
 
 

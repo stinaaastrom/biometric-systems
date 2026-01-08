@@ -438,12 +438,6 @@ class Evaluation:
         if hasattr(test_generator, 'labels'):
             labels = test_generator.labels
             
-            # DEBUG: Print label statistics
-            print(f"\n[DEBUG] Label Statistics (original ages from generator.labels):")
-            print(f"  Min label: {np.min(labels):.2f}")
-            print(f"  Max label: {np.max(labels):.2f}")
-            print(f"  Mean label: {np.mean(labels):.2f}")
-            
             if labels.ndim == 2 and labels.shape[1] > 1:
                 # One-hot encoded - convert to class indices then to ages
                 actual_classes = np.argmax(labels, axis=1)
