@@ -375,6 +375,98 @@ class Evaluation:
                 print(f"  {ethnicity}: {misclassified_ethnicity}/{total_ethnicity} misclassified ({error_rate:.2f}%)")
         print("\n" + "="*50 + "\n")
 
+    def _misclassification_top_breakdown(self, actual_classes, predicted_classes, etn_test):
+        """Report which ethnicity and age class are most common among misclassified samples.
+
+        Requires that `etn_test` is aligned 1:1 with `actual_classes`/`predicted_classes` lengths.
+        """
+        if etn_test is None:
+            return
+        etn_arr = np.array(etn_test)
+        if etn_arr.shape[0] != actual_classes.shape[0]:
+            print("[WARN] Skipping misclassification top breakdown: etn_test length mismatch.")
+            return
+
+        mis_mask = (predicted_classes != actual_classes)
+        if not np.any(mis_mask):
+            print("No misclassifications to analyze for ethnicity/age group.")
+            return
+
+        # Filter known ethnicities
+        known_mask = etn_arr != 'unknown'
+        use_mask = mis_mask & known_mask
+        if not np.any(use_mask):
+            print("No misclassified samples with known ethnicity.")
+            return
+
+        # Top ethnicity among misclassified
+        mis_etn = etn_arr[use_mask]
+        etn_vals, etn_counts = np.unique(mis_etn, return_counts=True)
+        top_etn_idx = int(np.argmax(etn_counts))
+        top_etn = str(etn_vals[top_etn_idx])
+        top_etn_count = int(etn_counts[top_etn_idx])
+
+        # Top age class among misclassified (by true class)
+        mis_true_classes = actual_classes[mis_mask]
+        age_vals, age_counts = np.unique(mis_true_classes, return_counts=True)
+        top_age_idx = int(age_vals[int(np.argmax(age_counts))])
+        top_age_count = int(np.max(age_counts))
+        min_age, max_age = self.age_classes[top_age_idx]
+        top_age_label = f"{min_age}-{max_age}" if max_age else f"{min_age}+"
+
+        # Optional: top ethnicity x age class pair
+        pair_counts = {}
+        for etn, cls in zip(etn_arr[mis_mask], mis_true_classes):
+            if etn == 'unknown':
+                continue
+            pair_counts[(etn, int(cls))] = pair_counts.get((etn, int(cls)), 0) + 1
+        if pair_counts:
+            (pair_etn, pair_cls), pair_cnt = max(pair_counts.items(), key=lambda kv: kv[1])
+            p_min, p_max = self.age_classes[pair_cls]
+            pair_age_label = f"{p_min}-{p_max}" if p_max else f"{p_min}+"
+        else:
+            pair_etn, pair_cls, pair_cnt, pair_age_label = None, None, 0, "-"
+
+        print("\n" + "="*50)
+        print("Misclassification Top Breakdown (Ethnicity/Age)")
+        print("="*50)
+        print(f"Most common ethnicity among misclassified: {top_etn} ({top_etn_count})")
+        print(f"Most common true age class among misclassified: {top_age_label} (class {top_age_idx}, {top_age_count})")
+        if pair_etn is not None:
+            print(f"Top ethnicity x age pair: {pair_etn} & {pair_age_label} ({pair_cnt})")
+        print("="*50 + "\n")
+
+    def _print_ethnicity_ranking(self, etn_arr, actual_classes, predicted_classes):
+        """Print sorted ethnicity counts for overall, correctly classified, and misclassified samples."""
+        etn_arr = np.array(etn_arr)
+        # Overall
+        vals, counts = np.unique(etn_arr, return_counts=True)
+        overall = sorted(zip(vals, counts), key=lambda x: x[1], reverse=True)
+
+        # Correct and misclassified
+        correct_mask = (predicted_classes == actual_classes)
+        mis_mask = ~correct_mask
+        vals_c, counts_c = np.unique(etn_arr[correct_mask], return_counts=True) if np.any(correct_mask) else ([], [])
+        vals_m, counts_m = np.unique(etn_arr[mis_mask], return_counts=True) if np.any(mis_mask) else ([], [])
+        ranked_c = sorted(zip(vals_c, counts_c), key=lambda x: x[1], reverse=True)
+        ranked_m = sorted(zip(vals_m, counts_m), key=lambda x: x[1], reverse=True)
+
+        print("\n" + "="*50)
+        print("Ethnicity Ranking (sorted by count)")
+        print("="*50)
+        print("Overall:")
+        for etn, cnt in overall:
+            print(f"  {etn}: {int(cnt)}")
+        if ranked_c:
+            print("Correctly classified:")
+            for etn, cnt in ranked_c:
+                print(f"  {etn}: {int(cnt)}")
+        if ranked_m:
+            print("Misclassified:")
+            for etn, cnt in ranked_m:
+                print(f"  {etn}: {int(cnt)}")
+        print("="*50 + "\n")
+
     def _plot_metrics(self, history, actual_classes, predicted_classes):
         cm = confusion_matrix(actual_classes, predicted_classes)
         has_history = history is not None and hasattr(history, 'history')
@@ -411,6 +503,33 @@ class Evaluation:
         plt.xlabel('Predicted Age Class')
         plt.ylabel('Actual Age Class')
         plt.tight_layout()
+
+        # Save raw confusion matrix
+        save_dir = os.path.join(os.path.dirname(__file__), 'reports')
+        os.makedirs(save_dir, exist_ok=True)
+        cm_raw_path = os.path.join(save_dir, 'confusion_matrix.png')
+        plt.savefig(cm_raw_path, dpi=150)
+        print(f"Confusion matrix saved to: {cm_raw_path}")
+        plt.show()
+
+        # Also plot and save a normalized confusion matrix (per-row)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            row_sums = cm.sum(axis=1, keepdims=True)
+            cm_norm = np.divide(cm, row_sums, where=row_sums != 0)
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(
+            cm_norm, annot=True, fmt='.2f', cmap='Blues', vmin=0, vmax=1,
+            xticklabels=[f"{min_age}-{max_age}" if max_age else f"{min_age}+" for min_age, max_age in self.age_classes],
+            yticklabels=[f"{min_age}-{max_age}" if max_age else f"{min_age}+" for min_age, max_age in self.age_classes]
+        )
+        plt.title('Normalized Confusion Matrix (per true class)')
+        plt.xlabel('Predicted Age Class')
+        plt.ylabel('Actual Age Class')
+        plt.tight_layout()
+        cm_norm_path = os.path.join(save_dir, 'confusion_matrix_normalized.png')
+        plt.savefig(cm_norm_path, dpi=150)
+        print(f"Normalized confusion matrix saved to: {cm_norm_path}")
         plt.show()
 
     def evaluate(self, model, test_generator, history=None, gen_test=None, etn_test=None, output_dir=None):
@@ -478,8 +597,25 @@ class Evaluation:
         if not np.any(valid_mask):
             raise ValueError("No valid age labels found for evaluation")
 
+        # Apply validity mask to labels, predictions, and align demographics if provided
         age_test = age_test[valid_mask].astype(float)
         predictions = predictions[valid_mask]
+        gen_arr = None
+        etn_arr = None
+        if gen_test is not None:
+            gen_arr = np.array(gen_test)
+            if gen_arr.shape[0] == valid_mask.shape[0]:
+                gen_arr = gen_arr[valid_mask]
+            else:
+                print("[WARN] gen_test length mismatch; demographic filtering will be skipped.")
+                gen_arr = None
+        if etn_test is not None:
+            etn_arr = np.array(etn_test)
+            if etn_arr.shape[0] == valid_mask.shape[0]:
+                etn_arr = etn_arr[valid_mask]
+            else:
+                print("[WARN] etn_test length mismatch; demographic filtering will be skipped.")
+                etn_arr = None
 
         # Clamp predictions to a minimum valid age to avoid None classes from negatives
         predictions = np.clip(predictions, 0, 110)
@@ -514,6 +650,23 @@ class Evaluation:
         predictions = predictions[class_valid_mask]
         actual_classes = actual_classes[class_valid_mask].astype(int)
         predicted_classes = predicted_classes[class_valid_mask].astype(int)
+        if gen_arr is not None and gen_arr.shape[0] == class_valid_mask.shape[0]:
+            gen_arr = gen_arr[class_valid_mask]
+        if etn_arr is not None and etn_arr.shape[0] == class_valid_mask.shape[0]:
+            etn_arr = etn_arr[class_valid_mask]
+
+        # Optional: filter out unknown demographics entirely if provided
+        if (gen_arr is not None) and (etn_arr is not None):
+            demo_known_mask = (gen_arr != 'unknown') & (etn_arr != 'unknown')
+            removed_demo = int(np.sum(~demo_known_mask))
+            if removed_demo > 0:
+                print(f"[INFO] Filtering out {removed_demo} samples with unknown gender/ethnicity")
+            age_test = age_test[demo_known_mask]
+            predictions = predictions[demo_known_mask]
+            actual_classes = actual_classes[demo_known_mask]
+            predicted_classes = predicted_classes[demo_known_mask]
+            gen_arr = gen_arr[demo_known_mask]
+            etn_arr = etn_arr[demo_known_mask]
 
         # Overall age-class accuracy summary
         self._print_summary(actual_classes, predicted_classes, len(predictions))
@@ -526,7 +679,16 @@ class Evaluation:
         self._print_classification_report(actual_classes, predicted_classes)
         self._print_detailed_stats(predictions, age_test, actual_classes, predicted_classes)
         self._print_under18_over25_analysis(predictions, age_test, actual_classes)
-        self._demographic_analysis(actual_classes, predicted_classes, gen_test, etn_test)
+        # Use aligned, filtered demographics when available
+        self._demographic_analysis(actual_classes, predicted_classes, gen_arr, etn_arr)
+        # Ethnicity ranking (overall, correct, misclassified)
+        if etn_arr is not None:
+            self._print_ethnicity_ranking(etn_arr, actual_classes, predicted_classes)
+        # New: top ethnicity and age class among misclassified
+        try:
+            self._misclassification_top_breakdown(actual_classes, predicted_classes, etn_arr)
+        except Exception as e:
+            print(f"[WARN] Could not compute misclassification top breakdown: {e}")
         self._plot_metrics(history, actual_classes, predicted_classes)
 
         return accuracy, correct_predictions, incorrect
