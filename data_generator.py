@@ -4,12 +4,15 @@ import keras
 from image_processing import ImageProcesser
 
 class ImageDiskGenerator(keras.utils.Sequence):
-    def __init__(self, image_paths, labels, batch_size=32, augment=False, shuffle=True):
+    def __init__(self, image_paths, labels, batch_size=32, augment=False, shuffle=True, 
+                 genders=None, ethnicities=None):
         self.image_paths = np.array(image_paths)
         self.labels = np.array(labels)
         self.batch_size = batch_size
         self.augment = augment
         self.shuffle = shuffle
+        self.genders = np.array(genders) if genders is not None else None
+        self.ethnicities = np.array(ethnicities) if ethnicities is not None else None
         self.image_processor = ImageProcesser()
         self.aug_transform = self.image_processor.get_augmentation_transform() if augment else None
         self.on_epoch_end()

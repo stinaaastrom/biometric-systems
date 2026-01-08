@@ -93,19 +93,14 @@ class Evaluation:
             pred_count = int(np.sum(pred_mask))
             correct_count = int(np.sum(true_mask & (predicted_classes == class_idx)))
             if true_count > 0:
-                class_predictions = predictions[true_mask]
-                class_actuals = age_test[true_mask]
-                mae = float(np.mean(np.abs(class_predictions - class_actuals)))
                 class_accuracy = (correct_count / true_count * 100.0) if true_count > 0 else 0.0
             else:
-                mae = 0.0
                 class_accuracy = 0.0
             print(f"\nAge Period: {class_label}")
             print(f"  True samples: {true_count}")
             print(f"  Predicted as this period: {pred_count}")
             print(f"  Correctly classified: {correct_count}")
             print(f"  Accuracy: {class_accuracy:.2f}% ({correct_count}/{true_count})")
-            print(f"  Mean Absolute Error: {mae:.2f} years")
         print("\n" + "="*50 + "\n")
 
     def _print_policy_summary(self, predicted_ages, age_test):
@@ -224,7 +219,6 @@ class Evaluation:
             fpr_curve, tpr_curve, thresholds = roc_curve(y_true_adult.astype(int), adult_scores)
             auc_val = auc(fpr_curve, tpr_curve)
             frr_curve = 1.0 - tpr_curve
-            gar_curve = 1.0 - frr_curve
 
             zero_frr_mask = frr_curve <= 1e-6
             zero_far_mask = fpr_curve <= 1e-6
@@ -232,7 +226,7 @@ class Evaluation:
             zero_far_frr = float(np.min(frr_curve[zero_far_mask])) if np.any(zero_far_mask) else float(frr_curve[int(np.argmin(fpr_curve))])
         except Exception:
             fpr_curve, tpr_curve, thresholds, auc_val = None, None, None, None
-            frr_curve, gar_curve = None, None
+            frr_curve = None
             zero_frr_far, zero_far_frr = None, None
 
         print("\n" + "="*50)
@@ -243,7 +237,6 @@ class Evaluation:
         print(f"Special FPR (minors predicted >15): {fpr_minors_over15:.4f}")
         if auc_val is not None:
             print(f"ROC AUC (adult score): {auc_val:.4f}")
-            print(f"GAR (TPR) at default threshold: {float(tpr_curve[0]):.4f}")
             print(f"ZeroFRR (FAR when FRR=0): {zero_frr_far:.6f}")
             print(f"ZeroFAR (FRR when FAR=0): {zero_far_frr:.6f}")
         print("\n" + "="*50 + "\n")
@@ -516,11 +509,9 @@ class Evaluation:
         predicted_ages, predicted_probs = self._predict(model, test_generator)
 
         # Extract ground-truth labels
-        labels_are_one_hot = False
         if hasattr(test_generator, 'labels'):
             labels = test_generator.labels
             if labels.ndim == 2 and labels.shape[1] > 1:
-                labels_are_one_hot = True
                 actual_classes = np.argmax(labels, axis=1)
                 age_test = np.array([self._class_to_age(cls) for cls in actual_classes])
             else:
@@ -531,7 +522,6 @@ class Evaluation:
             for i in range(len(test_generator)):
                 _x, y_batch = test_generator[i]
                 if y_batch.ndim == 2 and y_batch.shape[1] > 1:
-                    labels_are_one_hot = True
                     batch_classes = np.argmax(y_batch, axis=1)
                     batch_ages = np.array([self._class_to_age(cls) for cls in batch_classes])
                 else:
@@ -578,11 +568,6 @@ class Evaluation:
 
         predicted_ages = np.clip(predicted_ages, 0, 110)
 
-        if not labels_are_one_hot:
-            mae = np.mean(np.abs(predicted_ages - age_test))
-            median_mae = np.median(np.abs(predicted_ages - age_test))
-            print(f"Overall MAE: {mae:.2f} years")
-            print(f"Median MAE:  {median_mae:.2f} years")
 
         actual_classes = np.array([self.find_age_class_fn(age) for age in age_test])
         predicted_classes = np.array([self.find_age_class_fn(age) for age in predicted_ages])

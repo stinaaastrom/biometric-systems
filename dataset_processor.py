@@ -362,8 +362,20 @@ class DatasetProcessor:
         test_etnicity = all_etnicity[test_idx]
         
         # Create generators
-        train_gen = ImageDiskGenerator(train_paths, train_labels, batch_size=batch_size, augment=True, shuffle=True)
-        test_gen = ImageDiskGenerator(test_paths, test_labels, batch_size=batch_size, augment=False, shuffle=False)
+        train_gen = ImageDiskGenerator(
+            train_paths, train_labels, 
+            batch_size=batch_size, 
+            augment=True, 
+            shuffle=True
+        )
+        test_gen = ImageDiskGenerator(
+            test_paths, test_labels, 
+            batch_size=batch_size, 
+            augment=False, 
+            shuffle=False,
+            genders=test_genders,
+            ethnicities=test_etnicity
+        )
         
         return (
             train_gen,

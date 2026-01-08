@@ -185,6 +185,12 @@ class CNNModel:
         if test_generator is None:
             raise ValueError("No test_generator available for evaluation")
         
+        # Extract demographic data from generator if available and not provided
+        if gen_test is None and hasattr(test_generator, 'genders'):
+            gen_test = test_generator.genders
+        if etn_test is None and hasattr(test_generator, 'ethnicities'):
+            etn_test = test_generator.ethnicities
+        
         # Create evaluator instance
         evaluator = Evaluation(AGE_CLASSES, self.find_age_class)
         
