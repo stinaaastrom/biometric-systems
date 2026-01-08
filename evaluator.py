@@ -34,22 +34,10 @@ class Evaluation:
         else:
             # Fallback for other shapes
             predicted_ages = predictions.ravel()
-        
-        # DEBUG: Print prediction statistics to diagnose normalization issues
-        print(f"\n[DEBUG] Prediction Statistics (raw from model):")
-        print(f"  Min prediction: {np.min(predicted_ages):.6f}")
-        print(f"  Max prediction: {np.max(predicted_ages):.6f}")
-        print(f"  Mean prediction: {np.mean(predicted_ages):.6f}")
-        print(f"  First 10 predictions: {predicted_ages[:10]}")
+    
         
         # Denormalize predictions (model was trained with normalized labels)
-        print(f"\n[DENORMALIZATION] Multiplying predictions by {AGE_NORMALIZATION_FACTOR}...")
         predicted_ages = predicted_ages * AGE_NORMALIZATION_FACTOR
-        
-        print(f"[DEBUG] Prediction Statistics (after denormalization):")
-        print(f"  Min prediction: {np.min(predicted_ages):.2f} years")
-        print(f"  Max prediction: {np.max(predicted_ages):.2f} years")
-        print(f"  Mean prediction: {np.mean(predicted_ages):.2f} years")
         
         return predicted_ages
     
@@ -183,10 +171,28 @@ class Evaluation:
         # Use normalized predicted age as score proxy for ROC
         adult_scores = np.clip(ages_pred / 80.0, 0.0, 1.0)
         try:
-            fpr_curve, tpr_curve, _ = roc_curve(y_true_adult.astype(int), adult_scores)
+            fpr_curve, tpr_curve, thresholds = roc_curve(y_true_adult.astype(int), adult_scores)
             auc_val = auc(fpr_curve, tpr_curve)
+            frr_curve = 1.0 - tpr_curve  # FNMR
+            gar_curve = 1.0 - frr_curve  # GAR = 1 - FRR
+
+            # ZeroFRR: FAR when FRR==0 (or closest)
+            zero_frr_mask = frr_curve <= 1e-6
+            if np.any(zero_frr_mask):
+                zero_frr_far = float(np.min(fpr_curve[zero_frr_mask]))
+            else:
+                zero_frr_far = float(fpr_curve[int(np.argmin(frr_curve))])
+
+            # ZeroFAR: FRR when FAR==0 (or closest)
+            zero_far_mask = fpr_curve <= 1e-6
+            if np.any(zero_far_mask):
+                zero_far_frr = float(np.min(frr_curve[zero_far_mask]))
+            else:
+                zero_far_frr = float(frr_curve[int(np.argmin(fpr_curve))])
         except Exception:
-            fpr_curve, tpr_curve, auc_val = None, None, None
+            fpr_curve, tpr_curve, thresholds, auc_val = None, None, None, None
+            frr_curve, gar_curve = None, None
+            zero_frr_far, zero_far_frr = None, None
 
         print("\n" + "="*50)
         print("Binary Metrics (Adult >=18)")
@@ -196,10 +202,43 @@ class Evaluation:
         print(f"Special FPR (minors predicted >15): {fpr_minors_over15:.4f}")
         if auc_val is not None:
             print(f"ROC AUC (adult score): {auc_val:.4f}")
+            print(f"GAR (TPR) at default threshold: {float(tpr_curve[0]):.4f}")
+            print(f"ZeroFRR (FAR when FRR=0): {zero_frr_far:.6f}")
+            print(f"ZeroFAR (FRR when FAR=0): {zero_far_frr:.6f}")
         print("\n" + "="*50 + "\n")
 
         if auc_val is not None:
             self._plot_roc_curve(fpr_curve, tpr_curve, auc_val, output_dir=output_dir)
+            eer, eer_threshold = self._compute_eer(fpr_curve, tpr_curve, thresholds)
+            self._plot_far_frr(thresholds, fpr_curve, 1 - tpr_curve, eer, eer_threshold, output_dir=output_dir)
+            print(f"EER: {eer:.4f} at threshold {eer_threshold:.4f}")
+
+    def _compute_eer(self, fpr, tpr, thresholds):
+        frr = 1.0 - tpr
+        diff = np.abs(fpr - frr)
+        idx = int(np.argmin(diff))
+        return float((fpr[idx] + frr[idx]) / 2.0), float(thresholds[idx])
+
+    def _plot_far_frr(self, thresholds, far, frr, eer, eer_threshold, output_dir=None):
+        plt.figure(figsize=(6, 5))
+        plt.plot(thresholds, far, label='FAR (FPR)', color='red')
+        plt.plot(thresholds, frr, label='FRR', color='blue')
+        plt.axhline(eer, color='gray', linestyle='--', linewidth=1)
+        plt.axvline(eer_threshold, color='gray', linestyle='--', linewidth=1)
+        plt.scatter([eer_threshold], [eer], color='black', zorder=5, label=f'EER={eer:.3f}')
+        plt.xlabel('Threshold (normalized score)')
+        plt.ylabel('Rate')
+        plt.title('FAR/FRR vs Threshold')
+        plt.ylim(0, 1)
+        plt.legend()
+        plt.tight_layout()
+
+        save_dir = output_dir or os.path.join(os.path.dirname(__file__), 'reports')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'far_frr_curve.png')
+        plt.savefig(save_path, dpi=150)
+        print(f"FAR/FRR curve saved to: {save_path}")
+        plt.show()
 
     def _plot_roc_curve(self, fpr, tpr, auc_val, output_dir=None):
         plt.figure(figsize=(6, 5))
@@ -457,8 +496,11 @@ class Evaluation:
 
         age_test = age_test[class_valid_mask]
         predictions = predictions[class_valid_mask]
-        actual_classes = actual_classes[class_valid_mask]
-        predicted_classes = predicted_classes[class_valid_mask]
+        actual_classes = actual_classes[class_valid_mask].astype(int)
+        predicted_classes = predicted_classes[class_valid_mask].astype(int)
+
+        # Overall age-class accuracy summary
+        self._print_summary(actual_classes, predicted_classes, len(predictions))
 
         # Policy-based summary (severe errors only)
         accuracy, correct_predictions, incorrect = self._print_policy_summary(predictions, age_test)

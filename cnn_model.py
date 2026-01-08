@@ -8,7 +8,7 @@ from tensorflow.keras.applications import EfficientNetB2
 from tensorflow.keras.layers import GlobalAveragePooling2D, Dense, Dropout, Input
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, Callback
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.applications.efficientnet import preprocess_input
 from tensorflow.keras.layers import Input, Lambda
 
@@ -30,33 +30,6 @@ from keras.utils import to_categorical
 from constants import AGE_CLASSES
 from evaluator import Evaluation
 from data_generator import AGE_NORMALIZATION_FACTOR
-
-
-# Custom callback to log predictions during training
-class PredictionLogger(Callback):
-    """Log sample predictions during training for debugging"""
-    def __init__(self, test_generator, log_frequency=5):
-        super().__init__()
-        self.test_generator = test_generator
-        self.log_frequency = log_frequency
-    
-    def on_epoch_end(self, epoch, logs=None):
-        if (epoch + 1) % self.log_frequency == 0:
-            # Get a batch of test data
-            X_batch, y_batch = self.test_generator[0]
-            
-            # Make predictions
-            predictions = self.model.predict(X_batch, verbose=0)
-            predictions = predictions.flatten()[:5]  # First 5 predictions
-            targets = y_batch[:5]  # First 5 targets
-            
-            # Denormalize for display
-            pred_ages = predictions * AGE_NORMALIZATION_FACTOR
-            target_ages = targets * AGE_NORMALIZATION_FACTOR
-            
-            print(f"\n[Epoch {epoch + 1}] Sample Predictions (normalized | denormalized):")
-            for i, (pred, target) in enumerate(zip(predictions, targets)):
-                print(f"  Sample {i+1}: Pred {pred:.4f} ({pred_ages[i]:.1f} y) | Target {target:.4f} ({target_ages[i]:.1f} y)")
 
 
 # Default path for model files (absolute path)
@@ -95,27 +68,40 @@ class CNNModel:
     @staticmethod
     def find_age_class(predicted_age):
         """
-        Returns the index of the class an age belongs to,
-        or None if age is outside all defined ranges.
+            Returns the index of the class an age belongs to.
+            Ages between classes are rounded to the nearest class.
         Handles both scalar age and one-hot vector (e.g. [0 0 0 0 0 1 0 0]).
         """
         if isinstance(predicted_age, np.ndarray):
-            # If it's a one-hot vector (length 8)
-            if predicted_age.ndim == 1 and predicted_age.shape[0] == len(AGE_CLASSES):
-                return int(np.argmax(predicted_age))
-            # If it's an array with a single element
+            # Only scalar arrays are allowed; no one-hot handling
             if predicted_age.size == 1:
                 predicted_age = float(predicted_age)
             else:
-                raise ValueError(f"find_age_class: predicted_age must be a scalar or one-hot vector, got shape {predicted_age.shape}")
+                raise ValueError(f"find_age_class: predicted_age must be a scalar value, got shape {predicted_age.shape}")
 
-        for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
-            if max_age is None:
-                if predicted_age >= min_age:
+            # Handle ages below the first class
+            if predicted_age < AGE_CLASSES[0][0]:
+                return 0
+        
+            # Find the best matching class
+            for idx, (min_age, max_age) in enumerate(AGE_CLASSES):
+                if max_age is None:
+                    # Last class (75+)
+                    if predicted_age >= min_age:
+                        return idx
+                elif min_age <= predicted_age <= max_age:
+                    # Age falls directly in this class
                     return idx
-            elif min_age <= predicted_age <= max_age:
-                return idx
-        return None
+                elif idx < len(AGE_CLASSES) - 1:
+                    # Check if age is between this class and the next
+                    next_min = AGE_CLASSES[idx + 1][0]
+                    if max_age < predicted_age < next_min:
+                        # Age is in the gap - assign to closer class
+                        midpoint = (max_age + next_min) / 2
+                        return idx if predicted_age < midpoint else idx + 1
+        
+            # Fallback: should not happen, but return last class if nothing matched
+            return len(AGE_CLASSES) - 1
 
 
 
@@ -189,8 +175,7 @@ class CNNModel:
                 factor=0.5,
                 patience=2,
                 min_lr=1e-6
-            ),
-            PredictionLogger(self.test_generator, log_frequency=5)
+            )
         ]
 
         print("\n--- Stage 1: Feature extractor (regression) ---")
