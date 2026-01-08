@@ -212,6 +212,7 @@ class Evaluation:
             eer, eer_threshold = self._compute_eer(fpr_curve, tpr_curve, thresholds)
             self._plot_far_frr(thresholds, fpr_curve, 1 - tpr_curve, eer, eer_threshold, output_dir=output_dir)
             print(f"EER: {eer:.4f} at threshold {eer_threshold:.4f}")
+            self._plot_det_curve(fpr_curve, frr_curve, output_dir=output_dir)
 
     def _compute_eer(self, fpr, tpr, thresholds):
         frr = 1.0 - tpr
@@ -238,6 +239,27 @@ class Evaluation:
         save_path = os.path.join(save_dir, 'far_frr_curve.png')
         plt.savefig(save_path, dpi=150)
         print(f"FAR/FRR curve saved to: {save_path}")
+        plt.show()
+
+    def _plot_det_curve(self, fpr_curve, frr_curve, output_dir=None):
+        # Avoid zeros for log scale by clipping to a small epsilon
+        eps = 1e-6
+        far = np.clip(fpr_curve, eps, 1.0)
+        frr = np.clip(frr_curve, eps, 1.0)
+
+        plt.figure(figsize=(6, 5))
+        plt.loglog(far, frr, marker='o', linewidth=1, markersize=3, color='purple')
+        plt.xlabel('FAR (False Accept Rate)')
+        plt.ylabel('FRR (False Reject Rate)')
+        plt.title('DET Curve (log-log)')
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+        plt.tight_layout()
+
+        save_dir = output_dir or os.path.join(os.path.dirname(__file__), 'reports')
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, 'det_curve.png')
+        plt.savefig(save_path, dpi=150)
+        print(f"DET curve saved to: {save_path}")
         plt.show()
 
     def _plot_roc_curve(self, fpr, tpr, auc_val, output_dir=None):
