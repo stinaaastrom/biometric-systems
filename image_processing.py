@@ -19,6 +19,7 @@ class ImageProcesser:
     def normalize_image(self, img):
         """Normalize image to [0, 1] float32."""
         return img.astype('float32') / 255.0
+    
     def detect_crop_faces(self, frame, conf_threshold=0.7):
         """Face detetion using deep learning, image based technique"""
         frame_height = frame.shape[0]

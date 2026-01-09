@@ -269,8 +269,8 @@ class CNNModel:
                 self.age_test = test_data['age_test']
                 print(f"✓ Test data loaded from {test_data_path} ({len(self.age_test)} samples)")
             except Exception as e:
-                print(f"⚠️  Warning: Could not load test data: {e}")
+                print(f"Warning: Could not load test data: {e}")
         else:
-            print(f"ℹ️  Test data file not found at {test_data_path}")
+            print(f"Test data file not found at {test_data_path}")
         
         return self.model

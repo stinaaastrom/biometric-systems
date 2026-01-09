@@ -109,8 +109,7 @@ class DatasetProcessor:
                     skipped_count += 1
                     continue
 
-                #face_img = self.image_processor.detect_crop_faces(frame)
-                face_img = frame
+                face_img = self.image_processor.detect_crop_faces(frame)
                 if face_img is None:
                     skipped_count += 1
                     continue
@@ -152,7 +151,7 @@ class DatasetProcessor:
                     skipped_count += 1
                     continue
 
-                #face_img = self.image_processor.detect_crop_faces(frame)
+                face_img = self.image_processor.detect_crop_faces(frame)
                 face_img = frame
                 if face_img is None:
                     skipped_count += 1

@@ -207,8 +207,6 @@ class Evaluation:
         fpr_18 = float(np.sum(minors_mask & y_pred_adult)) / float(np.sum(minors_mask)) if np.sum(minors_mask) > 0 else 0.0
         fnr_18 = float(np.sum(adults_mask & (~y_pred_adult))) / float(np.sum(adults_mask)) if np.sum(adults_mask) > 0 else 0.0
 
-        fpr_minors_over15 = float(np.sum((ages_true < 18) & (ages_pred > 15))) / float(np.sum(ages_true < 18)) if np.sum(ages_true < 18) > 0 else 0.0
-
         if predicted_probs is not None and predicted_probs.ndim == 2:
             adult_class_idxs = [i for i, (min_age, _max) in enumerate(self.age_classes) if min_age >= 18]
             adult_scores = predicted_probs[:, adult_class_idxs].sum(axis=1)
@@ -220,10 +218,13 @@ class Evaluation:
             auc_val = auc(fpr_curve, tpr_curve)
             frr_curve = 1.0 - tpr_curve
 
-            zero_frr_mask = frr_curve <= 1e-6
-            zero_far_mask = fpr_curve <= 1e-6
-            zero_frr_far = float(np.min(fpr_curve[zero_frr_mask])) if np.any(zero_frr_mask) else float(fpr_curve[int(np.argmin(frr_curve))])
-            zero_far_frr = float(np.min(frr_curve[zero_far_mask])) if np.any(zero_far_mask) else float(frr_curve[int(np.argmin(fpr_curve))])
+            # ZeroFRR: FAR when FRR is minimal (ideally 0)
+            min_frr_idx = int(np.argmin(frr_curve))
+            zero_frr_far = float(fpr_curve[min_frr_idx])
+            
+            # ZeroFAR: FRR when FAR is minimal (ideally 0)
+            min_far_idx = int(np.argmin(fpr_curve))
+            zero_far_frr = float(frr_curve[min_far_idx])
         except Exception:
             fpr_curve, tpr_curve, thresholds, auc_val = None, None, None, None
             frr_curve = None
@@ -234,7 +235,6 @@ class Evaluation:
         print("="*50)
         print(f"FPR @18 (minors predicted adult): {fpr_18:.4f}")
         print(f"FNR @18 (adults predicted minor): {fnr_18:.4f}")
-        print(f"Special FPR (minors predicted >15): {fpr_minors_over15:.4f}")
         if auc_val is not None:
             print(f"ROC AUC (adult score): {auc_val:.4f}")
             print(f"ZeroFRR (FAR when FRR=0): {zero_frr_far:.6f}")
@@ -503,7 +503,6 @@ class Evaluation:
         Returns:
             (accuracy_percent, correct_count, incorrect_count)
         """
-        print("Using generator-based evaluation (memory efficient)...")
         
         # Get predictions (class probabilities) from generator
         predicted_ages, predicted_probs = self._predict(model, test_generator)
