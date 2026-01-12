@@ -260,7 +260,10 @@ class Evaluation:
             # ZeroFAR: FRR when FAR is minimal (ideally 0)
             min_far_idx = int(np.argmin(fpr_curve))
             zero_far_frr = float(frr_curve[min_far_idx])
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR] Failed to compute ROC curve: {e}")
+            print(f"[DEBUG] adult_scores shape: {adult_scores.shape}, unique values: {len(np.unique(adult_scores))}")
+            print(f"[DEBUG] y_true_adult: {np.sum(y_true_adult)} adults, {np.sum(~y_true_adult)} minors")
             fpr_curve, tpr_curve, thresholds, auc_val = None, None, None, None
             frr_curve = None
             zero_frr_far, zero_far_frr = None, None

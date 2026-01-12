@@ -263,6 +263,52 @@ class DatasetProcessor:
         self.genders = np.array(self.genders)
         self.etnicity = np.array(self.etnicity)
 
+    def _print_class_distribution(self, ages_subset, title="Age class distribution"):
+        """Print and visualize age class distribution for any subset of data."""
+        age_buckets = defaultdict(int)
+        for age in ages_subset:
+            for class_idx, (min_age, max_age) in enumerate(AGE_CLASSES):
+                if max_age is None:
+                    if age >= min_age:
+                        age_buckets[class_idx] += 1
+                        break
+                elif min_age <= age <= max_age:
+                    age_buckets[class_idx] += 1
+                    break
+        
+        print(f"\n{title}:")
+        for class_idx, (min_age, max_age) in enumerate(AGE_CLASSES):
+            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
+            count = age_buckets[class_idx]
+            print(f"  {label}: {count} images")
+        
+        # Create visualization
+        import matplotlib.pyplot as plt
+        class_labels = []
+        counts = []
+        for class_idx, (min_age, max_age) in enumerate(AGE_CLASSES):
+            label = f"{min_age}+" if max_age is None else f"{min_age}-{max_age}"
+            class_labels.append(label)
+            counts.append(age_buckets[class_idx])
+        
+        plt.figure(figsize=(10, 6))
+        bars = plt.bar(class_labels, counts, color='steelblue', edgecolor='black')
+        plt.xlabel('Age Class', fontsize=12)
+        plt.ylabel('Number of Images', fontsize=12)
+        plt.title(title, fontsize=14, fontweight='bold')
+        plt.xticks(rotation=45)
+        plt.grid(axis='y', alpha=0.3)
+        
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{int(height)}',
+                    ha='center', va='bottom', fontsize=10)
+        
+        plt.tight_layout()
+        plt.show()
+
     def _balance_indices(self, indices):
         age_buckets = defaultdict(list)
         for idx in indices:
@@ -327,6 +373,9 @@ class DatasetProcessor:
         
         # Convert ages to class indices
         age_classes = np.array([self._age_to_class(age) for age in all_ages])
+        
+        # Show original distribution before any processing
+        self._print_class_distribution(all_ages, "Original Dataset - Age class distribution")
         
         # Split into train/test with stratification
         indices = np.arange(len(all_paths))
