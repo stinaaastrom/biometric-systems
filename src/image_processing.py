@@ -20,6 +20,7 @@ class ImageProcesser:
         self.face_net.setInput(blob)
         detections = self.face_net.forward()
         face_boxes = []
+        face = None
         for i in range(detections.shape[2]):
             confidence = detections[0, 0, i, 2]
             if confidence > conf_threshold:
@@ -38,6 +39,27 @@ class ImageProcesser:
             ]
 
         return face
+
+    def detect_and_crop_face(self, frame, conf_threshold=0.7):
+        """Detect first face and return both cropped face and bbox tuple."""
+        face = self.detect_crop_faces(frame, conf_threshold=conf_threshold)
+        if face is None:
+            return None, (0, 0, 0, 0)
+
+        frame_height, frame_width = frame.shape[:2]
+        blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), [104, 117, 123], False, False)
+        self.face_net.setInput(blob)
+        detections = self.face_net.forward()
+        for i in range(detections.shape[2]):
+            confidence = detections[0, 0, i, 2]
+            if confidence > conf_threshold:
+                x1 = int(detections[0, 0, i, 3] * frame_width)
+                y1 = int(detections[0, 0, i, 4] * frame_height)
+                x2 = int(detections[0, 0, i, 5] * frame_width)
+                y2 = int(detections[0, 0, i, 6] * frame_height)
+                return face, (x1, y1, x2, y2)
+
+        return face, (0, 0, 0, 0)
     
     
     def image_enhancements(self, img):

@@ -7,14 +7,31 @@ from sklearn.model_selection import train_test_split
 from image_processing import ImageProcesser
 import albumentations as A
 
-IMAGE_SIZE = (64, 64)
 
-# Data augmentation pipeline
+def _occlude_lower_face(image, **kwargs):
+    """Simulate facial hair/occlusion by darkening a random lower band."""
+    drop_prob = 0.25  # Internal probability, handled by A.Lambda p parameter
+    if np.random.rand() > drop_prob:
+        return image
+    h, w, _ = image.shape
+    band_height = int(h * np.random.uniform(0.15, 0.3))
+    y_start = int(h * np.random.uniform(0.55, 0.7))
+    y_end = min(h, y_start + band_height)
+    mask = image.copy()
+    mask[y_start:y_end, :] = (mask[y_start:y_end, :] * np.random.uniform(0.25, 0.55)).astype(mask.dtype)
+    return mask
+
+IMAGE_SIZE = (224, 224)
+
+# Data augmentation pipeline (train-only)
 augmentation = A.Compose([
+    A.RandomResizedCrop(size=IMAGE_SIZE, scale=(0.9, 1.0), ratio=(0.9, 1.1), p=0.6),
     A.HorizontalFlip(p=0.5),
-    A.Rotate(limit=10, p=0.3),
-    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.3),
-    A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+    A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.05, rotate_limit=10, border_mode=cv2.BORDER_REFLECT_101, p=0.4),
+    A.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1, hue=0.02, p=0.3),
+    A.GaussNoise(var_limit=(10.0, 40.0), p=0.25),
+    A.Lambda(image=_occlude_lower_face, p=0.15),
+    A.CoarseDropout(max_holes=1, max_height=int(0.08*IMAGE_SIZE[0]), max_width=int(0.08*IMAGE_SIZE[1]), fill_value=0, p=0.2),
 ])
 
 # Define data folder paths
@@ -300,6 +317,48 @@ class DatasetDownloader:
             self.images, self.ages, self.genders, self.etnicity, 
             test_size=0.2, random_state=42
         )
+
+        # Apply augmentation and MIX with original training data to avoid distribution shift
+        # Augment only a subset (50%) to control memory, then mix with originals
+        subset_size = max(1, int(0.5 * len(X_train)))
+        subset_idx = np.random.choice(len(X_train), size=subset_size, replace=False)
+        augmented = []
+        for idx in subset_idx:
+            img = X_train[idx]
+            aug = augmentation(image=(img * 255.0).astype(np.uint8))['image']
+            augmented.append(aug.astype(np.float32) / 255.0)
+        if augmented:
+            X_train = np.concatenate([X_train, np.array(augmented, dtype=np.float32)], axis=0)
+            age_train = np.concatenate([age_train, age_train[subset_idx]], axis=0)
+            gen_train = np.array(list(gen_train) + list(np.array(gen_train)[subset_idx]))
+            etn_train = np.array(list(etn_train) + list(np.array(etn_train)[subset_idx]))
+
+        # Boundary-focused oversampling (train-only): duplicate samples near class boundaries
+        boundary_ranges = [(24, 26), (34, 36), (44, 46)]
+        dup_X, dup_age, dup_gen, dup_etn = [], [], [], []
+        for i, age in enumerate(age_train):
+            try:
+                a = float(age)
+            except Exception:
+                continue
+            if any(min_a <= a <= max_a for (min_a, max_a) in boundary_ranges):
+                dup_X.append(X_train[i])
+                dup_age.append(age_train[i])
+                dup_gen.append(gen_train[i])
+                dup_etn.append(etn_train[i])
+
+        if len(dup_X) > 0:
+            # Cap duplication to 20% of current training size to limit memory
+            max_dup = int(0.2 * len(X_train))
+            if len(dup_X) > max_dup:
+                dup_X = dup_X[:max_dup]
+                dup_age = dup_age[:max_dup]
+                dup_gen = dup_gen[:max_dup]
+                dup_etn = dup_etn[:max_dup]
+            X_train = np.concatenate([X_train, np.array(dup_X, dtype=np.float32)], axis=0)
+            age_train = np.concatenate([age_train, np.array(dup_age)], axis=0)
+            gen_train = np.array(list(gen_train) + list(dup_gen))
+            etn_train = np.array(list(etn_train) + list(dup_etn))
         
         print(f"Split complete: {len(X_train)} train, {len(X_test)} test")
         print(f"Age train dtype: {type(age_train[0])}, example: {age_train[0]}")
