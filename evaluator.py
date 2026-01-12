@@ -166,6 +166,39 @@ class Evaluation:
                     print(f"  {label}: {breakdown[label]} ({share:.2f}%)")
         print("\n" + "="*50 + "\n")
 
+    def _print_over25_while_under18_analysis(self, predictions, age_test, actual_classes):
+        UNDER_18_THRESHOLD = 18
+        OVER_25_THRESHOLD = 25
+        predicted_over_25_mask = predictions > OVER_25_THRESHOLD
+        actual_under_18_mask = age_test < UNDER_18_THRESHOLD
+        critical_case_mask = predicted_over_25_mask & actual_under_18_mask
+        total_critical = int(np.sum(critical_case_mask))
+        percent_critical = (total_critical / len(age_test) * 100.0) if len(age_test) > 0 else 0.0
+
+        critical_actual_classes = actual_classes[critical_case_mask]
+        critical_actual_classes_valid = critical_actual_classes[critical_actual_classes != None]
+        breakdown = {}
+        for class_idx in range(len(self.age_classes)):
+            count = int(np.sum(critical_actual_classes_valid == class_idx))
+            if count > 0:
+                min_age, max_age = self.age_classes[class_idx]
+                label = f"{min_age}-{max_age}" if max_age else f"{min_age}+"
+                breakdown[label] = count
+
+        print("\n" + "="*50)
+        print("Pred>25 while True<18 Analysis")
+        print("="*50)
+        print(f"Cases: {total_critical}/{len(age_test)} ({percent_critical:.2f}%)")
+        if total_critical > 0:
+            print("Breakdown by true age class:")
+            for class_idx in range(len(self.age_classes)):
+                min_age, max_age = self.age_classes[class_idx]
+                label = f"{min_age}-{max_age}" if max_age else f"{min_age}+"
+                if label in breakdown:
+                    share = breakdown[label] / total_critical * 100.0
+                    print(f"  {label}: {breakdown[label]} ({share:.2f}%)")
+        print("\n" + "="*50 + "\n")
+
     def _decision_policy(self, pred_age):
         """Decision policy based on predicted age.
 
@@ -209,9 +242,11 @@ class Evaluation:
 
         if predicted_probs is not None and predicted_probs.ndim == 2:
             adult_class_idxs = [i for i, (min_age, _max) in enumerate(self.age_classes) if min_age >= 18]
-            adult_scores = predicted_probs[:, adult_class_idxs].sum(axis=1)
+            # Use max probability of adult classes as score (not sum to avoid artificial perfect separation)
+            adult_scores = np.max(predicted_probs[:, adult_class_idxs], axis=1)
         else:
-            adult_scores = np.clip(ages_pred / 80.0, 0.0, 1.0)
+            # Fallback: normalize predicted age to 0-1 range
+            adult_scores = np.clip(ages_pred / 100.0, 0.0, 1.0)
 
         try:
             fpr_curve, tpr_curve, thresholds = roc_curve(y_true_adult.astype(int), adult_scores)
@@ -611,6 +646,7 @@ class Evaluation:
         self._print_classification_report(actual_classes, predicted_classes)
         self._print_detailed_stats(predicted_ages, age_test, actual_classes, predicted_classes)
         self._print_under18_over25_analysis(predicted_ages, age_test, actual_classes)
+        self._print_over25_while_under18_analysis(predicted_ages, age_test, actual_classes)
         self._demographic_analysis(actual_classes, predicted_classes, gen_arr, etn_arr)
         if etn_arr is not None:
             self._print_ethnicity_ranking(etn_arr, actual_classes, predicted_classes)
