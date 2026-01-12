@@ -622,6 +622,7 @@ class Evaluation:
 
         age_test = age_test[class_valid_mask]
         predicted_ages = predicted_ages[class_valid_mask]
+        predicted_probs = predicted_probs[class_valid_mask]
         actual_classes = actual_classes[class_valid_mask].astype(int)
         predicted_classes = predicted_classes[class_valid_mask].astype(int)
         if gen_arr is not None and gen_arr.shape[0] == class_valid_mask.shape[0]:
@@ -636,6 +637,7 @@ class Evaluation:
                 print(f"[INFO] Filtering out {removed_demo} samples with unknown gender/ethnicity")
             age_test = age_test[demo_known_mask]
             predicted_ages = predicted_ages[demo_known_mask]
+            predicted_probs = predicted_probs[demo_known_mask]
             actual_classes = actual_classes[demo_known_mask]
             predicted_classes = predicted_classes[demo_known_mask]
             gen_arr = gen_arr[demo_known_mask]
