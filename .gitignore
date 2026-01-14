@@ -12,10 +12,8 @@ __pycache__/
 
 # Data and Models
 data/
-models/
-*.h5
-*.keras
-*.pkl
+# Allow committing trained models
+# (remove or adjust if model binaries should stay local)
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
