@@ -227,8 +227,105 @@ class Evaluation:
         print(f"Human review (18-25): {human} ({human/total*100:.2f}%)")
         print("\n" + "="*50 + "\n")
 
+    def _compute_and_print_policy_aligned_metrics(self, predicted_ages, age_test):
+        """Compute FPR/FNR aligned with the three-tier policy:
+        - Denied: <18 (minor)
+        - Human Review: 18-25 (boundary)
+        - Approved: >25 (adult)
+        
+        Policy-aligned metrics:
+        - FPR = Minor (<18) incorrectly APPROVED (predicted >25) / Total minors
+        - FNR = Adult (>25) incorrectly DENIED (predicted <18) / Total adults
+        """
+        ages_true = np.asarray(age_test)
+        ages_pred = np.asarray(predicted_ages)
+        
+        # Ground truth categories
+        minors_mask = ages_true < 18
+        boundary_mask = (ages_true >= 18) & (ages_true <= 25)
+        adults_mask = ages_true > 25
+        
+        # Predicted decisions
+        pred_denied = ages_pred < 18
+        pred_human_review = (ages_pred >= 18) & (ages_pred <= 25)
+        pred_approved = ages_pred > 25
+        
+        # Critical errors for policy
+        false_positives = minors_mask & pred_approved  # Minor approved (CRITICAL)
+        false_negatives = adults_mask & pred_denied    # Adult denied (CRITICAL)
+        
+        # Correct decisions
+        true_negatives = minors_mask & pred_denied     # Minor correctly denied
+        true_positives = adults_mask & pred_approved   # Adult correctly approved
+        
+        # Human review cases
+        minors_to_review = minors_mask & pred_human_review
+        adults_to_review = adults_mask & pred_human_review
+        boundary_to_review = boundary_mask & pred_human_review
+        
+        # Other boundary outcomes
+        boundary_denied = boundary_mask & pred_denied
+        boundary_approved = boundary_mask & pred_approved
+        
+        # Calculate rates
+        n_minors = int(np.sum(minors_mask))
+        n_adults = int(np.sum(adults_mask))
+        n_boundary = int(np.sum(boundary_mask))
+        
+        fpr_policy = float(np.sum(false_positives)) / n_minors if n_minors > 0 else 0.0
+        fnr_policy = float(np.sum(false_negatives)) / n_adults if n_adults > 0 else 0.0
+        tpr_policy = float(np.sum(true_positives)) / n_adults if n_adults > 0 else 0.0
+        tnr_policy = float(np.sum(true_negatives)) / n_minors if n_minors > 0 else 0.0
+        
+        # Human review rates
+        minor_review_rate = float(np.sum(minors_to_review)) / n_minors if n_minors > 0 else 0.0
+        adult_review_rate = float(np.sum(adults_to_review)) / n_adults if n_adults > 0 else 0.0
+        boundary_review_rate = float(np.sum(boundary_to_review)) / n_boundary if n_boundary > 0 else 0.0
+        
+        print("\n" + "="*50)
+        print("POLICY-ALIGNED METRICS (Three-Tier System)")
+        print("="*50)
+        print(f"Policy: Denied (<18) | Human Review (18-25) | Approved (>25)")
+        print("")
+        print(f"Ground Truth Distribution:")
+        print(f"  Minors (<18):    {n_minors:5d} ({n_minors/len(ages_true)*100:.1f}%)")
+        print(f"  Boundary (18-25): {n_boundary:5d} ({n_boundary/len(ages_true)*100:.1f}%)")
+        print(f"  Adults (>25):    {n_adults:5d} ({n_adults/len(ages_true)*100:.1f}%)")
+        print("")
+        print(f"CRITICAL ERROR RATES:")
+        print(f"  FPR (Minor→Approved): {fpr_policy:.4f} ({int(np.sum(false_positives))}/{n_minors})")
+        print(f"  FNR (Adult→Denied):   {fnr_policy:.4f} ({int(np.sum(false_negatives))}/{n_adults})")
+        print("")
+        print(f"CORRECT DECISION RATES:")
+        print(f"  TNR (Minor→Denied):   {tnr_policy:.4f} ({int(np.sum(true_negatives))}/{n_minors})")
+        print(f"  TPR (Adult→Approved): {tpr_policy:.4f} ({int(np.sum(true_positives))}/{n_adults})")
+        print("")
+        print(f"HUMAN REVIEW RATES:")
+        print(f"  Minors→Review:    {minor_review_rate:.4f} ({int(np.sum(minors_to_review))}/{n_minors})")
+        print(f"  Boundary→Review:  {boundary_review_rate:.4f} ({int(np.sum(boundary_to_review))}/{n_boundary})")
+        print(f"  Adults→Review:    {adult_review_rate:.4f} ({int(np.sum(adults_to_review))}/{n_adults})")
+        print("")
+        print(f"BOUNDARY ZONE (18-25) BREAKDOWN:")
+        print(f"  Denied:   {int(np.sum(boundary_denied)):5d} ({np.sum(boundary_denied)/n_boundary*100 if n_boundary > 0 else 0:.1f}%)")
+        print(f"  Review:   {int(np.sum(boundary_to_review)):5d} ({np.sum(boundary_to_review)/n_boundary*100 if n_boundary > 0 else 0:.1f}%)")
+        print(f"  Approved: {int(np.sum(boundary_approved)):5d} ({np.sum(boundary_approved)/n_boundary*100 if n_boundary > 0 else 0:.1f}%)")
+        print("="*50 + "\n")
+        
+        return {
+            'fpr': fpr_policy,
+            'fnr': fnr_policy,
+            'tpr': tpr_policy,
+            'tnr': tnr_policy,
+            'false_positives': int(np.sum(false_positives)),
+            'false_negatives': int(np.sum(false_negatives)),
+            'minor_review_rate': minor_review_rate,
+            'adult_review_rate': adult_review_rate,
+            'boundary_review_rate': boundary_review_rate
+        }
+
     def _compute_and_print_binary_metrics(self, predicted_ages, predicted_probs, age_test, output_dir=None):
-        """Compute FPR/FNR, ROC/AUC, GAR, ZeroFAR/ZeroFRR, EER, and plots for adult (>=18)."""
+        """Compute FPR/FNR, ROC/AUC, GAR, ZeroFAR/ZeroFRR, EER, and plots for adult (>=18).
+        NOTE: This uses simple binary threshold (>=18). See _compute_and_print_policy_aligned_metrics for policy-aware metrics."""
         ages_true = np.asarray(age_test)
         ages_pred = np.asarray(predicted_ages)
 
@@ -269,10 +366,11 @@ class Evaluation:
             zero_frr_far, zero_far_frr = None, None
 
         print("\n" + "="*50)
-        print("Binary Metrics (Adult >=18)")
+        print("Binary Metrics (Adult >=18) [NOT policy-aligned]")
         print("="*50)
-        print(f"FPR @18 (minors predicted adult): {fpr_18:.4f}")
-        print(f"FNR @18 (adults predicted minor): {fnr_18:.4f}")
+        print(f"FPR @18 (minors predicted >=18): {fpr_18:.4f}")
+        print(f"FNR @18 (adults predicted <18): {fnr_18:.4f}")
+        print(f"Note: This treats 18-25 as 'adult'. See Policy-Aligned Metrics for true policy FPR/FNR.")
         if auc_val is not None:
             print(f"ROC AUC (adult score): {auc_val:.4f}")
             print(f"ZeroFRR (FAR when FRR=0): {zero_frr_far:.6f}")
@@ -647,6 +745,11 @@ class Evaluation:
 
         accuracy, correct_predictions, incorrect = self._print_policy_summary(predicted_ages, age_test)
         self._print_decision_summary(predicted_ages)
+        
+        # Policy-aligned metrics (three-tier system)
+        self._compute_and_print_policy_aligned_metrics(predicted_ages, age_test)
+        
+        # Binary metrics (simple >=18 threshold, ROC curves)
         self._compute_and_print_binary_metrics(predicted_ages, predicted_probs, age_test, output_dir=output_dir)
         self._print_classification_report(actual_classes, predicted_classes)
         self._print_detailed_stats(predicted_ages, age_test, actual_classes, predicted_classes)
